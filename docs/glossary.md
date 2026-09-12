@@ -6,7 +6,7 @@
 | Repository | 逻辑仓库，由 `remoteUrl` 识别。服务端不知道它在任何机器上的路径。 |
 | Runner | 用户机器上的守护进程 `agent-runner`，主动连接服务端，领取并执行 Attempt。kind 为 `local` 或 `vps`；`cloud` 在阶段 5。 |
 | RunnerRepository | 某个 Runner 对某个 Repository 的访问声明。路径只在 Runner 本地。 |
-| Engine | 具体的 coding agent 产品：`claude-code`、`codex`、`custom`。 |
+| Engine | 具体的 coding agent 产品：`claude-code`、`codex`、`pi`、`custom`。 |
 | Provider | 模型供应商，例如 Anthropic、OpenAI。一个 engine 可能接多个 provider。文档中除 `provider_rate_limit`、`provider_auth` 错误码外不使用该词。 |
 | AgentProfile | 某台 Runner 上某个 engine 的安装与启动方式，含能力快照。 |
 | AgentAdapter | Runner 内的代码模块，把一个 engine 接成统一接口。 |

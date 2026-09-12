@@ -63,6 +63,18 @@ POST /api/v1/runners/me/repositories
 
 服务端按 `(workspaceId, remoteUrl)` 匹配已有 Repository，没有则创建。Runner 把 `repositoryId → 本地路径` 写入 `~/.agent-workspace/repositories.json`。路径不会发送给服务端。
 
+### 4.1 创建 Run 时解析基线
+
+创建 Run 的 REST 请求只提交 `baseRef`，不接受浏览器提供的 commit SHA。服务端先校验 Task、Repository、Runner 和 AgentProfile，再通过已连接的 Runner WebSocket 请求：
+
+```text
+repository.resolve_ref { requestId, repositoryId, ref }
+```
+
+Runner 在 `repositories.json` 对应的本地 checkout 中执行本地 `git rev-parse`，不自动拉取远程仓库。成功解析后，服务端把返回的 `commitSha` 写入 `runs.base_commit_sha` 和 `frozenSpec.baseCommitSha`，随后创建 Attempt #1。服务端在落库前重新锁定 Task 并复核 Repository、Runner 和 Profile 归属，避免解析期间的配置变更覆盖冻结规范。
+
+解析请求由服务端等待最多 10 秒；Runner 离线、响应失败、超时或连接关闭时，Run 创建失败且不产生部分记录。
+
 ## 5. 连接与 hello
 
 WebSocket 建立后 Runner 先发：
@@ -225,13 +237,23 @@ Agent 的高频输出不走状态事件：
 
 ```text
 work.available        {}
-attempt.prompt        { attemptId, turnId, text }                 用户追加一句
-turn.cancel           { attemptId, turnId }                       停止这一轮
-attempt.cancel        { attemptId }                               取消 Run
-attempt.close         { attemptId, reason: 'user' }               用户点完成
+repository.resolve_ref { requestId, repositoryId, ref }             解析本地 checkout 的 ref
+attempt.prompt        { attemptId, turnId, text }                   用户追加一句
+turn.cancel           { attemptId, turnId }                         停止这一轮
+attempt.cancel        { attemptId }                                 取消 Run
+attempt.close         { attemptId, reason: 'user' }                 用户点完成
 approval.resolved     { attemptId, requestId, decision: 'allow' | 'deny' | 'allow_always' }
-attempt.stale         { attemptId, reason }                       见下
+attempt.stale         { attemptId, reason }                         见下
 ```
+
+Runner 对 `repository.resolve_ref` 回：
+
+```text
+repository.ref_resolved { requestId, repositoryId, ref, commitSha }
+repository.ref_failed   { requestId, repositoryId, ref, error }
+```
+
+`requestId` 由服务端生成并在这组消息中保持不变。Runner 必须回传原始 `repositoryId` 和 `ref`；服务端会校验响应属于发起请求的 WebSocket，且只接受匹配的响应。`repository.ref_failed` 的 `error` 只用于诊断，服务端不据此写入 Run。
 
 `attempt.stale` 在以下情况发出：Attempt 不存在、不属于该 Runner、不是其 Run 的当前 Attempt、已终态。Runner 收到后必须：
 

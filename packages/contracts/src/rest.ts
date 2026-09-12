@@ -188,7 +188,6 @@ export const CreateRunInputSchema = z
     runnerId: IdSchema,
     agentProfileId: IdSchema,
     baseRef: NameSchema,
-    baseCommitSha: CommitShaSchema,
     runConfig: RunConfigSchema,
     initialPrompt: TextSchema,
   })

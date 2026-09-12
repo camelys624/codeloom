@@ -271,18 +271,22 @@ function TaskPage() {
   const navigate = useNavigate();
   const client = useQueryClient();
   const task = tasks.data?.find((item) => item.id === taskId);
+  const selectedRepository = repositories.data?.find(
+    (repository) => repository.id === task?.repositoryId,
+  );
   const [runnerId, setRunnerId] = useState('');
   const [profileId, setProfileId] = useState('');
   const [baseRef, setBaseRef] = useState('main');
-  const [baseCommitSha, setBaseCommitSha] = useState('');
   const [prompt, setPrompt] = useState('');
+  useEffect(() => {
+    if (selectedRepository) setBaseRef(selectedRepository.defaultRef);
+  }, [selectedRepository?.id, selectedRepository?.defaultRef]);
   const create = useMutation({
     mutationFn: () =>
       api.createRun(taskId ?? '', {
         runnerId,
         agentProfileId: profileId,
         baseRef,
-        baseCommitSha,
         initialPrompt: prompt,
         runConfig: {
           agentProfileId: profileId,
@@ -423,15 +427,10 @@ function TaskPage() {
                 required
               />
             </label>
-            <label>
-              Base commit SHA
-              <input
-                value={baseCommitSha}
-                onChange={(event) => setBaseCommitSha(event.target.value)}
-                placeholder="40 位 commit SHA"
-                required
-              />
-            </label>
+            <p className="muted small">
+              创建 Run 时，Runner 会读取此 ref 的最新本地
+              commit；不会自动拉取远程仓库。
+            </p>
             <label>
               初始 prompt
               <textarea

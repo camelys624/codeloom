@@ -32,14 +32,14 @@
 
 详见 [实现状态与交接](./docs/status.md)。摘要：
 
-已落地并通过自动化检查（2026-09-10）：
+已落地并通过基线自动化检查（2026-09-10）：
 
 - Bun workspace、Node.js 22 / TypeScript 构建、锁文件、CI 定义和 argon2id 原生模块冒烟；
 - `packages/contracts`：实体、状态机、事件、消息、REST 游标/快照及 Agent 接口；`check:contracts` 对照文档中的 36 个类型；engine 含 `claude-code | codex | pi | custom`，协议含 `acp | sdk | rpc`（ADR-027）；
-- `apps/web/server/db`：18 张业务表、租户/执行归属外键、并发唯一约束、不可变 Run spec、只追加审计，以及带锁和校验和的事务迁移；
+- `apps/web`、`apps/runner` 与 `packages/git-worktree`：Fastify API、Runner 守护进程、React SPA、隔离 worktree 和每 Turn patch 链路已落地；创建 Run 时浏览器提交 `baseRef`，服务端通过 Runner 在本地 checkout 解析并冻结 `baseCommitSha`；
 - `packages/agent-adapters`：真实 Claude ACP 客户端、门禁程序、按 engine 的环境变量白名单、隔离于生产入口的 fake adapter，以及协议/脱敏回归测试。
 
-**尚不是可使用的完整任务台。** ACP 已握手并建立会话，但当前配置上游在真实第 1 轮返回 `429 Service Unavailable`，直接 API 探测返回 503。门禁未通过；服务端、Runner 守护进程和 Web UI 尚未开始。当前进程树监督仅支持 Linux。实测经过与限制见 [ADR-018](./docs/decisions.md#adr-018acp-优先agent-sdk-回退)，多引擎接入顺序见 [ADR-027](./docs/decisions.md#adr-027多引擎的接口面先于第二个-adapter)。
+**尚不是可使用的完整任务台。** ACP 已握手并建立会话，但当前配置上游在真实第 1 轮返回 `429 Service Unavailable`，直接 API 探测返回 503。门禁未通过；当前服务端、Runner 守护进程和 Web UI 已有最小竖切，但 PostgreSQL 集成测试、真实引擎验收和生产验收仍未完成。当前进程树监督仅支持 Linux。实测经过与限制见 [ADR-018](./docs/decisions.md#adr-018acp-优先agent-sdk-回退)，多引擎接入顺序见 [ADR-027](./docs/decisions.md#adr-027多引擎的接口面先于第二个-adapter)。
 
 ### 运行已有实现
 

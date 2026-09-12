@@ -96,16 +96,27 @@ audit_events        (workspace_id, entity_type, entity_id, created_at)
 
 ### 创建 Run
 
-一个事务：
+浏览器调用：
 
-1. 读取 Task 当前 `revision`，解析 `baseRef` 为 `baseCommitSha`（由 Runner 上报的最新 ref 快照，或用户手填）；
-2. 插入 `runs`（`status = 'pending'`，`frozen_spec`）；
-3. 插入 `attempts` #1（`status = 'queued'`，`resume_from = {kind:'base'}`）；
-4. 更新 `runs.current_attempt_id`；
-5. 插入 `run_events` `attempt.queued`；
-6. Task 若不在 `in_progress` 则更新；
-7. 插入 `audit_events`；
-8. `pg_notify('aw_wake', …)`。
+```http
+POST /api/v1/tasks/{taskId}/runs
+{
+  "runnerId": "rnr_…",
+  "agentProfileId": "agp_…",
+  "baseRef": "main",
+  "runConfig": { "…": "…" },
+  "initialPrompt": "…"
+}
+```
+
+请求不再携带 `baseCommitSha`。创建 Run 分为预检和一次数据库事务：
+
+1. 读取 Task 当前 `revision`，校验所选 Runner、Profile 和 Repository；
+2. 服务端通过该 Runner 的 WebSocket 发 `repository.resolve_ref`。Runner 只在已注册的本地 checkout 执行 `git rev-parse --verify --end-of-options "<baseRef>^{commit}"`，不自动 fetch；成功返回 `baseCommitSha`；
+3. 服务端重新锁定 Task，并复核 Task 的 Repository、Profile 与 Runner 归属；
+4. 在一个事务中将解析出的 `baseCommitSha` 写入 `runs` 和 `frozen_spec`（基线在 Run 创建时冻结），插入 `runs`、Attempt #1、`attempt.queued` 和审计记录，并唤醒 Runner。
+
+基线解析失败不创建 Run：Runner 离线返回 409，Runner 报告 ref 不存在或未注册本地仓库返回 422，10 秒未响应返回 504，连接在解析期间关闭返回 503。
 
 ### 接收 Runner 事件
 

@@ -117,6 +117,24 @@ export async function ensureWorktree(
   return createWorktree(input);
 }
 
+export async function resolveCommit(
+  checkoutPath: string,
+  ref: string,
+): Promise<string> {
+  const result = await runGit(
+    ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`],
+    checkoutPath,
+  );
+  if (result.code !== 0)
+    throw new Error(
+      `git rev-parse ${ref} failed: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  const commitSha = result.stdout.trim();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commitSha))
+    throw new Error(`git rev-parse ${ref} returned an invalid commit SHA`);
+  return commitSha;
+}
+
 export async function commitAll(
   worktreePath: string,
   message: string,

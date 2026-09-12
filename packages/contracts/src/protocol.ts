@@ -10,6 +10,7 @@ import {
 import { RunEventSchema, RunnerEventSchema } from './events.js';
 import { TranscriptFramesSchema } from './transcript.js';
 import {
+  CommitShaSchema,
   CountSchema,
   IdSchema,
   NameSchema,
@@ -66,6 +67,29 @@ export const RunnerStatusMessageSchema = z.strictObject({
   load: z.strictObject({ active: CountSchema, capacity: CountSchema }),
 });
 export type RunnerStatusMessage = z.infer<typeof RunnerStatusMessageSchema>;
+export const RepositoryResolveRefSchema = z.strictObject({
+  type: z.literal('repository.resolve_ref'),
+  requestId: IdSchema,
+  repositoryId: IdSchema,
+  ref: NameSchema,
+});
+export type RepositoryResolveRef = z.infer<typeof RepositoryResolveRefSchema>;
+export const RepositoryRefResolvedSchema = z.strictObject({
+  type: z.literal('repository.ref_resolved'),
+  requestId: IdSchema,
+  repositoryId: IdSchema,
+  ref: NameSchema,
+  commitSha: CommitShaSchema,
+});
+export type RepositoryRefResolved = z.infer<typeof RepositoryRefResolvedSchema>;
+export const RepositoryRefFailedSchema = z.strictObject({
+  type: z.literal('repository.ref_failed'),
+  requestId: IdSchema,
+  repositoryId: IdSchema,
+  ref: NameSchema,
+  error: TextSchema,
+});
+export type RepositoryRefFailed = z.infer<typeof RepositoryRefFailedSchema>;
 export const AttemptHeartbeatSchema = z.strictObject({
   type: z.literal('attempt.heartbeat'),
   attemptId: IdSchema,
@@ -170,6 +194,8 @@ export type AttemptStale = z.infer<typeof AttemptStaleSchema>;
 export const RunnerMessageSchema = z.discriminatedUnion('type', [
   RunnerHelloSchema,
   RunnerStatusMessageSchema,
+  RepositoryRefResolvedSchema,
+  RepositoryRefFailedSchema,
   AttemptHeartbeatSchema,
   AttemptEventMessageSchema,
   AttemptTranscriptMessageSchema,
@@ -180,6 +206,7 @@ export const ServerMessageSchema = z.union([
   AckSchema,
   NackSchema,
   WorkAvailableSchema,
+  RepositoryResolveRefSchema,
   AttemptPromptSchema,
   TurnCancelSchema,
   AttemptCancelSchema,

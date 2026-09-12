@@ -54,6 +54,8 @@ describe('Agent output security boundary', () => {
       HOME: '/home/example',
       ANTHROPIC_AUTH_TOKEN: 'provider',
       ANTHROPIC_BASE_URL: 'https://provider.example',
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1M]',
+      ANTHROPIC_DEFAULT_FABLE_MODEL_NAME: 'claude-fable-5-1[1M]',
       OPENAI_API_KEY: 'openai-secret',
       https_proxy: 'http://proxy.example:8080',
       RUNNER_TOKEN: 'runner-secret',
@@ -64,6 +66,8 @@ describe('Agent output security boundary', () => {
       HOME: '/home/example',
       ANTHROPIC_AUTH_TOKEN: 'provider',
       ANTHROPIC_BASE_URL: 'https://provider.example',
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1M]',
+      ANTHROPIC_DEFAULT_FABLE_MODEL_NAME: 'claude-fable-5-1[1M]',
       https_proxy: 'http://proxy.example:8080',
     });
     expect(engineEnvironment('codex', source)).toEqual({

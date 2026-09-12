@@ -1,6 +1,6 @@
 # 实现状态与交接
 
-- 日期：2026-09-10
+- 日期：2026-09-12
 - 对应文档：0.6 加 ADR-027
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
@@ -21,7 +21,7 @@
 | argon2id 原生模块冒烟 | `scripts/smoke-native.mjs` | `bun run smoke:native` | 已验证 |
 | 文档与代码类型对照 | `scripts/check-contract-docs.mjs` | `bun run check:contracts`，36 个类型 | 已验证 |
 | Prettier | `.prettierrc.json` | `bun run format:check` | 已验证 |
-| CI | `.github/workflows/ci.yml` | 目录不是 git 仓库，CI 从未运行 | 未验证 |
+| CI | `.github/workflows/ci.yml` | 本地提交已建立；远程 CI 从未运行 | 未验证 |
 | 本地 PostgreSQL Compose | `infra/local/compose.yml` | 需要 Docker | 未验证 |
 
 ### 2.2 `packages/contracts`
@@ -38,7 +38,7 @@
 - `migrations/0001_initial.sql`：18 张业务表，租户复合外键贯穿所有表；部分唯一索引保证一个 Run 一个活动 Attempt、一个 AgentProfile 一个被领取的 Attempt；触发器锁死 Run 冻结 spec、终态 Attempt 和审计表；`updated_at` 自动维护。
 - `migrate.ts`：advisory lock 加校验和，一个事务里应用全部待应用迁移并 bootstrap 首个 Workspace；可作 CLI（`bun run db:migrate`）或库函数调用。
 - 2026-09-10 变更：`agent_profiles.engine` CHECK 加 `pi`。
-- 验证：`migrate.test.ts` 8 个测试需要 Docker（Testcontainers）或 `DATABASE_URL`。本轮执行时 Testcontainers 报 `Could not find a working container runtime strategy`，因此数据库测试未运行；本机仍需接入 PostgreSQL 后重跑。
+- 验证：`migrate.test.ts` 8 个测试和全套 `bun run test` 本次均已通过；`bun run db:migrate` 双迁移和远程 CI 仍未执行。
 
 ### 2.4 `packages/agent-adapters`
 
@@ -53,25 +53,26 @@
 
 ### 2.5 `apps/web/server`
 
-- `src/app.ts`：Fastify REST、session 认证、CSRF、单 Workspace、Repository、Runner 配对/token 轮换、AgentProfile、Task revision CRUD、Run/Attempt 创建与重试、领取、心跳、reaper、事件/转写幂等接收、审批、Runner/浏览器 WebSocket、artifact 本地 BlobStore、静态托管与 SPA fallback。
+- `src/app.ts`：Fastify REST、session 认证、CSRF、单 Workspace、Repository、Runner 配对/token 轮换、AgentProfile、Task revision CRUD、Run/Attempt 创建与重试、领取、心跳、reaper、事件/转写幂等接收、审批、Runner/浏览器 WebSocket、artifact 本地 BlobStore、静态托管与 SPA fallback；创建 Run 只接受 `baseRef`，由在线 Runner 解析本地 checkout 的最新 commit，服务端在事务前后复核归属并冻结 `baseCommitSha`。
 - `src/db.ts`、`src/mapping.ts`：事务、租户查询和契约实体映射。
 - 验证：`bun run typecheck`、`bun run build`；无数据库时 fake Pool 路由冒烟通过，`GET /api/v1/me` 返回 401，静态 `/` 与 SPA fallback 返回 200，`index.html` 为 `no-cache`。
 
 ### 2.6 `apps/runner` 与 `packages/git-worktree`
 
 - `apps/runner/src/cli.ts`：`connect`、`repo add`、`daemon`、`status`；凭据 0600、数据目录 0700。
-- `apps/runner/src/daemon.ts`：Runner hello/status、领取、心跳、控制消息、Claude adapter、事件/转写 outbox、ack/nack 重发、stale 处理；持久化活跃 Attempt 元数据，重启后先提交 worktree 再发 `agent_crashed`。
-- `packages/git-worktree/src/index.ts`：隔离 worktree、每 Turn commit、diff stats 和 unified patch。
+- `apps/runner/src/daemon.ts`：Runner hello/status、领取、心跳、控制消息、`repository.resolve_ref` 响应、Claude adapter、事件/转写 outbox、ack/nack 重发、stale 处理；持久化活跃 Attempt 元数据，重启后先提交 worktree 再发 `agent_crashed`。
+- `packages/git-worktree/src/index.ts`：隔离 worktree、`baseRef` 的本地 commit 解析、每 Turn commit、diff stats 和 unified patch。
 - 验证：`bun run typecheck`；临时 git 仓库冒烟验证 worktree、commit、diff stats 和 patch；临时状态/outbox 冒烟验证并发写入、ack 和重启状态读取。
 
 ### 2.7 `apps/web/client`
 
-- Vite + React 19 + React Router 7 + TanStack Query；登录、Task/Repository、Run、EnforcementReport、转写、审批、取消/完成/重试、每 Turn Diff、Runner 配对、Repository 与 AgentProfile 管理。
+- Vite + React 19 + React Router 7 + TanStack Query；登录、Task/Repository、Run、EnforcementReport、转写、审批、取消/完成/重试、每 Turn Diff、Runner 配对、Repository 与 AgentProfile 管理；创建 Run 表单提交 `baseRef`，并从 Repository 的 `defaultRef` 初始化。
 - `lib/stream.ts`：按 Attempt 的事件/转写游标、缓冲、顺序补拉与去重。
 - 验证：Vite production build；Vite dev server 首页 HTTP 200。浏览器 daemon 不可用，未做 Chromium 视觉验证。
+
 ### 2.8 文档
 
-0.6 全套加 ADR-027（多引擎接口面与接入顺序）。`check:contracts` 保证 domain-model.md 与 runner-agent-protocol.md 里的 ts 类型块与代码一致，改类型必须同时改文档。
+0.6 全套加 ADR-027（多引擎接口面与接入顺序）。`data-and-events.md` 与 `runner-agent-protocol.md` 记录创建 Run 时由 Runner 解析本地 `baseRef`、冻结 `baseCommitSha` 以及 ref 解析失败语义。`check:contracts` 保证 domain-model.md 与 runner-agent-protocol.md 里的 ts 类型块与代码一致，改类型必须同时改文档。
 
 
 ## 3. 未完成
@@ -81,8 +82,8 @@
 ### W1 数据库测试跑通与环境
 
 - 前置：无。
-- 做：装 Docker 或提供 `DATABASE_URL`，跑 `bun run test` 全绿，`bun run db:migrate` 连跑两次第二次 `applied: []`；`git init`，首个提交，让 CI 真正跑一次。
-- 当前：本机 Testcontainers 找不到容器运行时，8 个数据库测试未运行。
+- 做：提供可复现的 PostgreSQL 环境，运行 `bun run db:migrate` 连跑两次第二次 `applied: []`，并让 CI 真正跑一次。
+- 当前：本次全套 `bun run test` 的 21 个测试均已通过；双迁移命令和远程 CI 尚未执行。
 - 验收：CI 绿。
 
 ### W5 真实 Claude 门禁

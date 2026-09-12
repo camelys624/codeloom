@@ -46,6 +46,9 @@ import {
   RunnerHelloSchema,
   RunnerMessageSchema,
   ServerHelloSchema,
+  RepositoryRefFailedSchema,
+  RepositoryRefResolvedSchema,
+  RepositoryResolveRefSchema,
   TranscriptNackSchema,
   TranscriptOutputSchema,
   TranscriptQuerySchema,
@@ -132,6 +135,16 @@ type Row = Record<string, any>;
 
 type WsLike = WebSocket & { isAlive?: boolean };
 
+type PendingRepositoryRef = {
+  runnerId: string;
+  repositoryId: string;
+  ref: string;
+  socket: WsLike;
+  timer: NodeJS.Timeout;
+  resolve: (commitSha: string) => void;
+  reject: (error: Error & { statusCode?: number }) => void;
+};
+
 const SESSION_COOKIE = 'aw_session';
 const PROTOCOL_VERSION = 1;
 const LEASE_SECONDS = 45;
@@ -203,6 +216,12 @@ function errorBody(
   return { error: { code, message } };
 }
 
+function httpError(
+  statusCode: number,
+  message: string,
+): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode });
+}
 function shortRunId(runId: string): string {
   return runId.replace(/^run_/, '').slice(0, 8);
 }
@@ -270,6 +289,7 @@ export async function buildApp(
   const browserSubscriptions = new Map<string, Set<WsLike>>();
   const socketRunners = new Map<WsLike, string>();
   const socketSubscriptions = new Map<WsLike, string>();
+  const pendingRepositoryRefs = new Map<string, PendingRepositoryRef>();
   let reaperTimer: NodeJS.Timeout | undefined;
   let notificationClient: PoolClient | undefined;
 
@@ -287,6 +307,55 @@ export async function buildApp(
     if (!socket || socket.readyState !== WebSocket.OPEN) return false;
     socket.send(JSON.stringify(message));
     return true;
+  }
+
+  async function resolveRepositoryRef(
+    runnerId: string,
+    repositoryId: string,
+    ref: string,
+  ): Promise<string> {
+    const socket = runnerSockets.get(runnerId);
+    if (!socket || socket.readyState !== WebSocket.OPEN)
+      throw httpError(
+        409,
+        'Runner must be online to resolve the latest repository commit',
+      );
+    const requestId = `ref_${randomUUID()}`;
+    const gate = Promise.withResolvers<string>();
+    const timer = setTimeout(() => {
+      if (pendingRepositoryRefs.delete(requestId))
+        gate.reject(
+          httpError(504, 'Runner did not resolve the repository ref in time'),
+        );
+    }, 10_000);
+    pendingRepositoryRefs.set(requestId, {
+      runnerId,
+      repositoryId,
+      ref,
+      socket,
+      timer,
+      resolve: gate.resolve,
+      reject: gate.reject,
+    });
+    try {
+      socket.send(
+        JSON.stringify(
+          RepositoryResolveRefSchema.parse({
+            type: 'repository.resolve_ref',
+            requestId,
+            repositoryId,
+            ref,
+          }),
+        ),
+      );
+    } catch {
+      clearTimeout(timer);
+      pendingRepositoryRefs.delete(requestId);
+      gate.reject(
+        httpError(503, 'Runner connection closed during ref resolution'),
+      );
+    }
+    return gate.promise;
   }
 
   async function sessionContext(
@@ -738,7 +807,7 @@ export async function buildApp(
             attempt.id,
             message.chunkSeq,
             message.turnId,
-            frames,
+            JSON.stringify(frames),
             frames.length,
             byteSize,
           ],
@@ -1346,45 +1415,87 @@ export async function buildApp(
     const auth = await ensureWorkspace(request as RequestWithAuth, reply);
     if (!auth) return;
     const body = parseBody(CreateRunInputSchema, request.body);
-    const taskId = String((request.params as { taskId: string }).taskId);
+    const params = request.params;
+    if (
+      !params ||
+      typeof params !== 'object' ||
+      !('taskId' in params) ||
+      typeof params.taskId !== 'string'
+    )
+      throw httpError(400, 'Task id is required');
+    const taskId = params.taskId;
+    const task = one(
+      await pool.query<Row>(
+        'SELECT * FROM tasks WHERE id = $1 AND workspace_id = $2',
+        [taskId, auth.workspace.id],
+      ),
+      'Task not found',
+    );
+    if (!task.repository_id)
+      throw httpError(400, 'Task must select a repository');
+    const profile = one(
+      await pool.query<Row>(
+        'SELECT * FROM agent_profiles WHERE id = $1 AND workspace_id = $2',
+        [body.agentProfileId, auth.workspace.id],
+      ),
+      'Agent profile not found',
+    );
+    if (String(profile.runner_id) !== body.runnerId)
+      throw httpError(
+        400,
+        'Agent profile does not belong to the selected runner',
+      );
+    const repository = one(
+      await pool.query<Row>(
+        "SELECT * FROM repositories WHERE id = $1 AND workspace_id = $2 AND status = 'active'",
+        [task.repository_id, auth.workspace.id],
+      ),
+      'Task repository not found',
+    );
+    const baseCommitSha = await resolveRepositoryRef(
+      body.runnerId,
+      String(repository.id),
+      body.baseRef,
+    );
     const result = await transaction(pool, async (client) => {
-      const task = one(
+      const lockedTask = one(
         await client.query<Row>(
           'SELECT * FROM tasks WHERE id = $1 AND workspace_id = $2 FOR UPDATE',
           [taskId, auth.workspace.id],
         ),
         'Task not found',
       );
-      const profile = one(
+      if (String(lockedTask.repository_id) !== String(repository.id))
+        throw httpError(
+          409,
+          'Task repository changed while resolving the latest commit; retry the Run',
+        );
+      const lockedProfile = one(
         await client.query<Row>(
           'SELECT * FROM agent_profiles WHERE id = $1 AND workspace_id = $2',
           [body.agentProfileId, auth.workspace.id],
         ),
         'Agent profile not found',
       );
-      if (String(profile.runner_id) !== body.runnerId)
-        throw Object.assign(
-          new Error('Agent profile does not belong to the selected runner'),
-          { statusCode: 400 },
+      if (String(lockedProfile.runner_id) !== body.runnerId)
+        throw httpError(
+          400,
+          'Agent profile does not belong to the selected runner',
         );
-      if (!task.repository_id)
-        throw Object.assign(new Error('Task must select a repository'), {
-          statusCode: 400,
-        });
-      const repository = one(
+      const lockedRepository = one(
         await client.query<Row>(
           "SELECT * FROM repositories WHERE id = $1 AND workspace_id = $2 AND status = 'active'",
-          [task.repository_id, auth.workspace.id],
+          [lockedTask.repository_id, auth.workspace.id],
         ),
         'Task repository not found',
       );
-      const profileEngine = String(profile.engine) as AgentEngine;
+      const profileEngine = String(lockedProfile.engine) as AgentEngine;
       const frozenSpec: FrozenRunSpec = FrozenRunSpecSchema.parse({
         taskId,
-        taskRevision: Number(task.revision),
-        repositoryId: repository.id,
+        taskRevision: Number(lockedTask.revision),
+        repositoryId: lockedRepository.id,
         baseRef: body.baseRef,
-        baseCommitSha: body.baseCommitSha,
+        baseCommitSha,
         runnerId: body.runnerId,
         agentProfileId: body.agentProfileId,
         engine: profileEngine,
@@ -1401,8 +1512,8 @@ export async function buildApp(
             auth.user.id,
             body.runnerId,
             body.agentProfileId,
-            repository.id,
-            body.baseCommitSha,
+            lockedRepository.id,
+            baseCommitSha,
             frozenSpec,
           ],
         ),
@@ -1414,7 +1525,7 @@ export async function buildApp(
         runnerId: body.runnerId,
         agentProfileId: body.agentProfileId,
         number: 1,
-        baseCommitSha: body.baseCommitSha,
+        baseCommitSha,
         resumeFrom: { kind: 'base' },
       });
       await client.query(
@@ -2027,6 +2138,26 @@ export async function buildApp(
               [runner.id],
             );
             break;
+          case 'repository.ref_resolved':
+          case 'repository.ref_failed': {
+            const pending = pendingRepositoryRefs.get(message.requestId);
+            if (!pending) break;
+            if (
+              pending.socket !== ws ||
+              pending.runnerId !== runner.id ||
+              pending.repositoryId !== message.repositoryId ||
+              pending.ref !== message.ref
+            )
+              throw new Error(
+                'Repository ref response does not match its request',
+              );
+            clearTimeout(pending.timer);
+            pendingRepositoryRefs.delete(message.requestId);
+            if (message.type === 'repository.ref_resolved')
+              pending.resolve(message.commitSha);
+            else pending.reject(httpError(422, message.error));
+            break;
+          }
           case 'attempt.heartbeat':
             await pool.query(
               `UPDATE attempts SET last_heartbeat_at = now(), lease_expires_at = now() + interval '45 seconds' WHERE id = $1 AND runner_id = $2 AND status IN ('claimed','preparing','running','idle','waiting_approval')`,
@@ -2098,6 +2229,14 @@ export async function buildApp(
       }
     });
     ws.on('close', async () => {
+      for (const [requestId, pending] of pendingRepositoryRefs) {
+        if (pending.socket !== ws) continue;
+        clearTimeout(pending.timer);
+        pendingRepositoryRefs.delete(requestId);
+        pending.reject(
+          httpError(503, 'Runner connection closed during ref resolution'),
+        );
+      }
       socketRunners.delete(ws);
       if (runnerSockets.get(runner.id) === ws) {
         runnerSockets.delete(runner.id);

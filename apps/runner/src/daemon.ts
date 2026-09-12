@@ -6,16 +6,17 @@ import {
   AgentCapabilitiesSchema,
   AttemptEventMessageSchema,
   AttemptTranscriptMessageSchema,
+  RepositoryRefFailedSchema,
+  RepositoryRefResolvedSchema,
   RunnerHelloSchema,
-  RunnerMessageSchema,
-  ServerHelloSchema,
+  ServerMessageSchema,
   type AgentCapabilities,
   type AgentProfile,
   type AttemptPrompt,
   type FrozenRunSpec,
   type OutboxMessage,
   type PermissionDecision,
-  type RunnerMessage,
+  type RepositoryResolveRef,
   type ServerMessage,
   type StartSessionInput,
   type TranscriptFrame,
@@ -29,6 +30,7 @@ import {
   commitAll,
   createWorktree,
   diffStats,
+  resolveCommit,
   unifiedDiff,
 } from '@agent-workspace/git-worktree';
 import { claim, profiles, uploadArtifact } from './http.js';
@@ -297,12 +299,61 @@ export class RunnerDaemon {
       );
   }
 
+  private async resolveRepositoryRef(
+    request: RepositoryResolveRef,
+  ): Promise<void> {
+    const repository = this.repositories.find(
+      (item) => item.repositoryId === request.repositoryId,
+    );
+    if (!repository) {
+      this.socket?.send(
+        JSON.stringify(
+          RepositoryRefFailedSchema.parse({
+            type: 'repository.ref_failed',
+            requestId: request.requestId,
+            repositoryId: request.repositoryId,
+            ref: request.ref,
+            error: 'Repository is not registered on this Runner',
+          }),
+        ),
+      );
+      return;
+    }
+    try {
+      const commitSha = await resolveCommit(repository.path, request.ref);
+      this.socket?.send(
+        JSON.stringify(
+          RepositoryRefResolvedSchema.parse({
+            type: 'repository.ref_resolved',
+            requestId: request.requestId,
+            repositoryId: request.repositoryId,
+            ref: request.ref,
+            commitSha,
+          }),
+        ),
+      );
+    } catch (error) {
+      this.socket?.send(
+        JSON.stringify(
+          RepositoryRefFailedSchema.parse({
+            type: 'repository.ref_failed',
+            requestId: request.requestId,
+            repositoryId: request.repositoryId,
+            ref: request.ref,
+            error: (error instanceof Error
+              ? error.message
+              : 'Unable to resolve repository ref'
+            ).slice(0, 64 * 1024),
+          }),
+        ),
+      );
+    }
+  }
+
   private async receive(raw: string): Promise<void> {
     let message: ServerMessage;
     try {
-      message = RunnerMessageSchema.or(ServerHelloSchema).parse(
-        JSON.parse(raw),
-      ) as ServerMessage;
+      message = ServerMessageSchema.parse(JSON.parse(raw));
     } catch {
       return;
     }
@@ -321,6 +372,9 @@ export class RunnerDaemon {
         break;
       case 'work.available':
         await this.claimAvailable();
+        break;
+      case 'repository.resolve_ref':
+        await this.resolveRepositoryRef(message);
         break;
       case 'ack':
         await this.outbox.acknowledge(

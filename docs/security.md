@@ -41,7 +41,7 @@
 - 服务端只知道 `repositoryId` 和 `remoteUrl`，从不接收、存储或下发绝对路径；
 - Runner 只操作用户通过 `agent-runner repo add` 明确注册的目录，以及自己数据目录下的 worktree；
 - worktree 路径由 Runner 生成，位于 `~/.agent-workspace/worktrees/` 下；
-- 用户注册的原始 checkout 永远不被删除、reset 或 checkout 到其他分支；Runner 只对它执行 `git worktree add` 和 `git fetch`；
+- 用户注册的原始 checkout 永远不被删除、reset 或 checkout 到其他分支；创建 Run 时 Runner 只在其中执行本地 `git rev-parse`，不自动 fetch，随后在 worktree 上执行 Git 操作；
 - git 凭据是用户机器上已有的 SSH agent 或 credential helper，服务端不参与；
 - Agent 是否能 push 取决于用户机器的凭据，Runner 无法阻止。因此 `ToolPolicy.gitPush` 的 enforcement 为 `none`，UI 如实显示。
 

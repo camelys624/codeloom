@@ -119,6 +119,7 @@ Run 创建时保存不可变的 `FrozenRunSpec`：仓库、基线 commit、Runne
 - `agent-runner connect`：配对并保存 token；
 - `agent-runner repo add <path>`：把本地已有 checkout 注册为仓库源；
 - `agent-runner daemon`：维持 WebSocket，领取 Attempt，每 15 秒发 Attempt 心跳；
+- 响应 `repository.resolve_ref`，在已注册 checkout 中解析 `baseRef`，不自动拉取远程仓库；
 - 创建 worktree 和分支，启动 Agent adapter；
 - 把 Agent 事件分成状态事件和转写块发送，本地缓冲未确认的部分；
 - 处理追加 prompt、取消、审批结果、关闭；
@@ -135,7 +136,10 @@ Run 创建时保存不可变的 `FrozenRunSpec`：仓库、基线 commit、Runne
 ## 5. 一个 Run 的生命周期
 
 ```text
-用户创建 Run（冻结 spec，Attempt#1 queued）
+用户创建 Run（提交 baseRef）
+  ↓ 服务端通过 Runner WebSocket 请求 repository.resolve_ref
+Runner 在本地 checkout 解析 commit（不 fetch）
+  ↓ 服务端冻结 baseCommitSha，Attempt#1 queued
   ↓ NOTIFY → Runner 收到 work.available（或 30 秒轮询）
 Runner 领取 → claimed
   ↓ worktree add + 新分支
