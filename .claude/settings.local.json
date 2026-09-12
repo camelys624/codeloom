@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/copy-migrations.mjs)",
+      "Bash(node scripts/smoke-native.mjs)",
+      "Bash(echo \"exit=$?\")"
+    ]
+  }
+}

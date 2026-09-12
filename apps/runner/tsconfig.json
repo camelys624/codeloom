@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist/src",
+    "tsBuildInfoFile": "dist/runner.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/contracts" },
+    { "path": "../../packages/agent-adapters" },
+    { "path": "../../packages/git-worktree" }
+  ]
+}

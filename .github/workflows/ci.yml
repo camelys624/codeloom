@@ -1,0 +1,34 @@
+name: Verify
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: aw
+          POSTGRES_USER: aw
+          POSTGRES_PASSWORD: aw
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U aw -d aw'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://aw:aw@localhost:5432/aw
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - run: bun install --frozen-lockfile
+      - run: bun pm untrusted
+      - run: bun run smoke:native
+      - run: bun run build
+      - run: bun run db:migrate
+      - run: bun run db:migrate
+      - run: bun run check:contracts
+      - run: bun run test

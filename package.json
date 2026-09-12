@@ -1,0 +1,44 @@
+{
+  "name": "agent-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "workspaces": [
+    "apps/*",
+    "apps/web/client",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b && apps/web/client/node_modules/.bin/vite build --config apps/web/client/vite.config.ts && node scripts/copy-migrations.mjs",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx apps/web/server/db/migrate.ts",
+    "server:dev": "node --env-file-if-exists=.env --import tsx apps/web/server/src/main.ts",
+    "spike:acp": "node --env-file-if-exists=.env --import tsx packages/agent-adapters/src/spike.ts",
+    "smoke:native": "node scripts/smoke-native.mjs",
+    "check:contracts": "node scripts/check-contract-docs.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "trustedDependencies": [
+    "argon2",
+    "esbuild"
+  ],
+  "dependencies": {
+    "argon2": "^0.44.0",
+    "pg": "^8.16.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "@types/pg": "^8.15.6",
+    "@testcontainers/postgresql": "^11.10.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
