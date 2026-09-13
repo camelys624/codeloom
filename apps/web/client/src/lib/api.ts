@@ -27,6 +27,7 @@ import {
   type MeOutput,
   type RegisterRepositoryInput,
   type Repository,
+  type Run,
   type RunSnapshot,
   type Runner,
   type Task,
@@ -102,6 +103,8 @@ export const api = {
     ),
   logout: () =>
     request('/api/v1/auth/logout', { method: 'POST' }, () => undefined),
+  task: (id: string) =>
+    request(`/api/v1/tasks/${encodeURIComponent(id)}`, {}, TaskSchema.parse),
   tasks: () =>
     request(
       '/api/v1/tasks',
@@ -125,6 +128,20 @@ export const api = {
       '/api/v1/tasks',
       { method: 'POST', body: JSON.stringify(input) },
       TaskSchema.parse,
+    ),
+  taskRuns: (taskId: string) =>
+    request(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/runs`,
+      {},
+      parseArray({
+        parse(value: unknown): Run[] {
+          return Array.isArray(value)
+            ? value.map((item) => RunSchema.parse(item))
+            : (() => {
+                throw new Error('Invalid Task Run list');
+              })();
+        },
+      }),
     ),
   updateTask: (
     taskId: string,

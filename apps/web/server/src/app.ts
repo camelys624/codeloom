@@ -1103,6 +1103,38 @@ export async function buildApp(
     );
     reply.send(result.rows.map(mapTask));
   });
+  app.get('/api/v1/tasks/:id', async (request, reply) => {
+    const auth = await requireAuth(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const id = String((request.params as { id: string }).id);
+    const result = await pool.query<Row>(
+      'SELECT * FROM tasks WHERE id = $1 AND workspace_id = $2',
+      [id, auth.workspace.id],
+    );
+    if (!result.rows[0]) {
+      reply.code(404).send(errorBody('not_found', 'Task not found'));
+      return;
+    }
+    reply.send(mapTask(result.rows[0]));
+  });
+  app.get('/api/v1/tasks/:taskId/runs', async (request, reply) => {
+    const auth = await requireAuth(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const taskId = String((request.params as { taskId: string }).taskId);
+    const task = await pool.query(
+      'SELECT 1 FROM tasks WHERE id = $1 AND workspace_id = $2',
+      [taskId, auth.workspace.id],
+    );
+    if (!task.rowCount) {
+      reply.code(404).send(errorBody('not_found', 'Task not found'));
+      return;
+    }
+    const result = await pool.query<Row>(
+      'SELECT * FROM runs WHERE task_id = $1 AND workspace_id = $2 ORDER BY created_at DESC, id',
+      [taskId, auth.workspace.id],
+    );
+    reply.send(result.rows.map(mapRun));
+  });
 
   app.post('/api/v1/tasks', async (request, reply) => {
     const auth = await ensureWorkspace(request as RequestWithAuth, reply);

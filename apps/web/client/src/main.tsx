@@ -261,7 +261,16 @@ function TaskRow({ task }: { task: Task }) {
 
 function TaskPage() {
   const { taskId } = useParams();
-  const tasks = useQuery({ queryKey: ['tasks'], queryFn: api.tasks });
+  const taskQuery = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => api.task(taskId ?? ''),
+    enabled: Boolean(taskId),
+  });
+  const taskRuns = useQuery({
+    queryKey: ['task-runs', taskId],
+    queryFn: () => api.taskRuns(taskId ?? ''),
+    enabled: Boolean(taskId),
+  });
   const runners = useQuery({ queryKey: ['runners'], queryFn: api.runners });
   const profiles = useQuery({ queryKey: ['profiles'], queryFn: api.profiles });
   const repositories = useQuery({
@@ -270,7 +279,7 @@ function TaskPage() {
   });
   const navigate = useNavigate();
   const client = useQueryClient();
-  const task = tasks.data?.find((item) => item.id === taskId);
+  const task = taskQuery.data;
   const selectedRepository = repositories.data?.find(
     (repository) => repository.id === task?.repositoryId,
   );
@@ -324,18 +333,32 @@ function TaskPage() {
     (profile) => profile.id === profileId,
   );
   if (
-    !task ||
+    taskQuery.isPending ||
+    taskRuns.isPending ||
     runners.isPending ||
     profiles.isPending ||
     repositories.isPending
   )
     return <p>加载任务配置…</p>;
-  if (runners.error || profiles.error || repositories.error)
+  if (
+    taskQuery.error ||
+    taskRuns.error ||
+    runners.error ||
+    profiles.error ||
+    repositories.error
+  )
     return (
       <ErrorNotice
-        error={runners.error ?? profiles.error ?? repositories.error}
+        error={
+          taskQuery.error ??
+          taskRuns.error ??
+          runners.error ??
+          profiles.error ??
+          repositories.error
+        }
       />
     );
+  if (!task) return <ErrorNotice error={new Error('Task not found')} />;
   return (
     <div className="grid">
       <Link className="muted" to="/">
@@ -348,6 +371,29 @@ function TaskPage() {
           <span className="badge">{task.status}</span>
           <span className="muted">revision {task.revision}</span>
         </div>
+      </section>
+      <section className="card">
+        <h3>历史 Run</h3>
+        {taskRuns.data.length === 0 ? (
+          <p className="muted">还没有执行记录。</p>
+        ) : (
+          <div className="list">
+            {taskRuns.data.map((run) => (
+              <Link className="list-item" key={run.id} to={`/runs/${run.id}`}>
+                <div
+                  className="row"
+                  style={{ justifyContent: 'space-between' }}
+                >
+                  <strong>{run.id}</strong>
+                  <span className={`badge ${run.status}`}>{run.status}</span>
+                </div>
+                <p className="muted small">
+                  {new Date(run.createdAt).toLocaleString()}
+                </p>
+              </Link>
+            ))}
+          </div>
+        )}
       </section>
       <section className="card">
         <h3>Repository</h3>
@@ -913,7 +959,7 @@ function RunPage() {
     .sort((left, right) => left.number - right.number);
   return (
     <div className="grid">
-      <Link className="muted" to="/">
+      <Link className="muted" to={`/tasks/${run.data.run.taskId}`}>
         ← 返回任务
       </Link>
       <section className="card">
