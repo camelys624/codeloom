@@ -20,12 +20,15 @@ import {
   type ServerMessage,
   type StartSessionInput,
   type TranscriptFrame,
+  type AgentSessionHandle,
 } from '@agent-workspace/contracts';
 import {
   ClaudeCodeAdapter,
+  PiAdapter,
   engineEnvironment,
   type Redactor,
 } from '@agent-workspace/agent-adapters';
+import type { AgentAdapter } from '@agent-workspace/contracts';
 import {
   commitAll,
   createWorktree,
@@ -46,6 +49,7 @@ import {
   type RunnerCredentials,
   type RunnerFiles,
 } from './config.js';
+
 interface ActiveAttempt {
   attemptId: string;
   baseCommitSha: string;
@@ -54,7 +58,7 @@ interface ActiveAttempt {
   nextClientSeq: number;
   nextChunkSeq: number;
   nextTurnNumber: number;
-  session?: Awaited<ReturnType<ClaudeCodeAdapter['startSession']>>;
+  session?: AgentSessionHandle;
   worktreePath?: string;
   stop: boolean;
   terminalSent: boolean;
@@ -96,11 +100,14 @@ function isRunnerWorktree(root: string, candidate: string): boolean {
     candidatePath !== rootPath && candidatePath.startsWith(`${rootPath}${sep}`)
   );
 }
-
 export interface RunnerDaemonOptions {
   credentials: RunnerCredentials;
   files?: RunnerFiles;
   maxConcurrency?: number;
+  adapterFactory?: (
+    engine: FrozenRunSpec['engine'],
+    profile: AgentProfile,
+  ) => AgentAdapter | undefined;
 }
 
 export class RunnerDaemon {
@@ -127,14 +134,22 @@ export class RunnerDaemon {
     this.repositories = await loadRepositories(this.files);
     await this.outbox.init();
     await this.loadRestartedAttempts();
-    for (const profile of await profiles(this.options.credentials))
-      this.profiles.set(profile.id, profile);
+    await this.refreshProfiles();
     await this.connect();
     this.claimTimer = setInterval(() => void this.claimAvailable(), 30_000);
   }
 
+  private async refreshProfiles(): Promise<void> {
+    const current = await profiles(this.options.credentials);
+    this.profiles.clear();
+    for (const profile of current) this.profiles.set(profile.id, profile);
+  }
+
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(() => this.sendStatus(), 15_000);
+  }
+
   async stop(): Promise<void> {
-    this.closed = true;
     clearTimeout(this.reconnectTimer);
     clearInterval(this.heartbeatTimer);
     clearInterval(this.claimTimer);
@@ -240,8 +255,12 @@ export class RunnerDaemon {
     this.socket = socket;
     socket.on('open', () => {
       this.reconnectDelay = 1_000;
-      socket.send(JSON.stringify(this.hello()));
-      this.heartbeatTimer = setInterval(() => this.sendStatus(), 30_000);
+      void this.refreshProfiles()
+        .then(() => {
+          socket.send(JSON.stringify(this.hello()));
+          this.startHeartbeat();
+        })
+        .catch(() => socket.close());
     });
     socket.on('message', (data) => void this.receive(data.toString()));
     socket.on('close', () => {
@@ -401,6 +420,9 @@ export class RunnerDaemon {
       case 'attempt.cancel':
         await this.handleAttemptCancel(message.attemptId);
         break;
+      case 'attempt.close':
+        await this.handleAttemptClose(message.attemptId);
+        break;
       case 'approval.resolved':
         this.active
           .get(message.attemptId)
@@ -515,17 +537,18 @@ export class RunnerDaemon {
         branchName: attemptRow.branchName,
         baseCommitSha: attemptRow.baseCommitSha,
       });
-      attempt.worktreePath = worktree.path;
-      await this.persistAttempt(attempt);
       const profile = this.profiles.get(spec.agentProfileId);
       if (!profile)
         throw new Error(
           `Agent profile ${spec.agentProfileId} is not available on this Runner`,
         );
       const adapter =
-        spec.engine === 'claude-code'
+        this.options.adapterFactory?.(spec.engine, profile) ??
+        (spec.engine === 'claude-code'
           ? new ClaudeCodeAdapter({ allowedRoots: [this.files.worktrees] })
-          : undefined;
+          : spec.engine === 'pi'
+            ? new PiAdapter()
+            : undefined);
       if (!adapter)
         throw new Error(`No adapter is installed for engine ${spec.engine}`);
       const capabilities = placeholderCapabilities(profile);

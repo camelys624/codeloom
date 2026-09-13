@@ -365,10 +365,18 @@ export class ClaudeCodeSession implements AgentSessionHandle {
   private error(error: unknown, fallback: RunError['code']): RunError {
     const message =
       error instanceof Error ? error.message : 'Unknown ACP failure';
+    // ACP's -32000 is the bridge's explicit authentication failure. Text is
+    // only a last-resort fallback: require a credential-specific phrase or an
+    // HTTP status token, not a substring such as the one in "author".
     const auth =
       (error instanceof AcpError && error.rpcCode === -32000) ||
-      /auth|login|api.?key|401|403/i.test(message);
-    const rateLimit = /rate.?limit|429/i.test(message);
+      /\b(?:authentication|unauthenticated|invalid\s+(?:api\s*)?key|api\s*key\s*(?:missing|invalid|required)|login\s+required|unauthorized|forbidden)\b/i.test(
+        message,
+      ) ||
+      /\b(?:401|403)\b/.test(message);
+    const rateLimit =
+      /\b(?:rate\s*limit(?:ed)?|too\s+many\s+requests)\b/i.test(message) ||
+      /\b429\b/.test(message);
     return {
       code: auth
         ? 'provider_auth'

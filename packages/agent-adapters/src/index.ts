@@ -11,3 +11,4 @@ export {
   RedactedLines,
 } from './redaction.js';
 export { processIsAlive, type ProcessIdentity } from './process.js';
+export { PiAdapter, PiSession, type PiAdapterOptions } from './pi.js';

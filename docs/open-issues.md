@@ -114,7 +114,7 @@ Bun 默认不执行未信任依赖的安装脚本，原生模块（argon2 等）
 
 ## E. 2026-09-10 代码评审
 
-评审对象：2026-09-07 落地的 `packages/contracts`、`apps/web/server/db`、`packages/agent-adapters`。类型检查、单元测试、契约对照、格式检查通过；数据库测试因本机无 Docker 未运行。多引擎决策见 ADR-027，交接清单见 [status.md](./status.md)。
+评审对象：2026-09-07 落地的 `packages/contracts`、`apps/web/server/db`、`packages/agent-adapters`。类型检查、单元测试、契约对照、格式检查通过；数据库测试当时因本机无 Docker 未运行，已在后续本地 PostgreSQL 16 环境补跑并通过。多引擎决策见 ADR-027，交接清单见 [status.md](./status.md)。
 
 ### I-24 ACP SDK 版本劈叉 — 未解决
 
@@ -124,9 +124,9 @@ Bun 默认不执行未信任依赖的安装脚本，原生模块（argon2 等）
 
 `process.ts` 每会话每 100 毫秒读一遍全机 `/proc/*/stat`，N 个并发会话 N 倍开销；只靠进程组与父链追踪，双 fork 后 100 毫秒内被 init 收养的进程会漏掉。处理：阶段 2 评估 cgroup 或 `prctl(PR_SET_CHILD_SUBREAPER)`；阶段 1 在 Runner 状态页如实显示扫描代价。
 
-### I-26 错误分类靠正则 — 未解决
+### I-26 错误分类靠正则 — 部分解决，待真实验证
 
-`claude-code.ts` 用 `/auth|login|api.?key|401|403/i` 判 `provider_auth`，任何含 `author` 的报错会被误分类。处理：优先用 ACP 错误码与桥接 `_meta`，正则只作最后回退并缩窄。
+`claude-code.ts` 已将文本回退从宽泛的 `/auth|login|api.?key|401|403/i` 缩窄为 credential-specific 词组、HTTP 401/403/429 和 ACP `-32000`，并新增回归覆盖 `author` 不会被判为 `provider_auth`。仍应优先使用桥接错误码与 `_meta`，文本只作最后回退。
 
 ### I-27 Run 状态双写无约束 — 已实现，待集成验证
 

@@ -272,6 +272,12 @@ export const api = {
       {},
       TranscriptOutputSchema.parse,
     ),
+  transcriptBefore: (attemptId: string, beforeChunk: number, limit = 200) =>
+    request(
+      `/api/v1/attempts/${encodeURIComponent(attemptId)}/transcript?beforeChunk=${beforeChunk}&limit=${limit}`,
+      {},
+      TranscriptOutputSchema.parse,
+    ),
 };
 
 export type {

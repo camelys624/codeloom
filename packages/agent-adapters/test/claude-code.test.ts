@@ -34,6 +34,7 @@ createInterface({input:process.stdin}).on('line',line=>{
       if (!selected || !extensionRejected) throw new Error('Model or extension negotiation failed');
       send({method:'session/update',params:{sessionId:'session-test',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Session is alive\\n'}}}});
       if(message.params.prompt[0].text==='wait') active=message.id;
+      else if(message.params.prompt[0].text==='author') send({id:message.id,error:{code:-32001,message:'authoring failed'}});
       else reply(message.id,{stopReason:'end_turn'});
       break;
     case 'session/cancel':
@@ -102,5 +103,14 @@ describe.skipIf(process.platform !== 'linux')('ACP interoperability', () => {
         .filter((frame) => frame.t === 'text_delta')
         .map((frame) => frame.text),
     ).toEqual(['Session is alive\n', 'Session is alive\n']);
+    const classified = await session.prompt({
+      turnId: 'trn_author',
+      text: 'author',
+      signal: new AbortController().signal,
+    });
+    expect(classified).toMatchObject({
+      stopReason: 'error',
+      error: { code: 'agent_crashed' },
+    });
   }, 15_000);
 });

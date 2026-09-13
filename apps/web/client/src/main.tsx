@@ -461,7 +461,9 @@ function RunnersPage() {
   const [runnerName, setRunnerName] = useState('');
   const [profileRunnerId, setProfileRunnerId] = useState('');
   const [profileName, setProfileName] = useState('');
-  const profileEngine = 'claude-code' as const;
+  const [profileEngine, setProfileEngine] = useState<'claude-code' | 'pi'>(
+    'pi',
+  );
   const [profileModel, setProfileModel] = useState('');
   const [repositoryName, setRepositoryName] = useState('');
   const [repositoryRemote, setRepositoryRemote] = useState('');
@@ -588,11 +590,17 @@ function RunnersPage() {
               </label>
               <label>
                 Engine
-                <select value={profileEngine} disabled>
+                <select
+                  value={profileEngine}
+                  onChange={(event) =>
+                    setProfileEngine(event.target.value as 'claude-code' | 'pi')
+                  }
+                >
+                  <option value="pi">pi</option>
                   <option value="claude-code">claude-code</option>
                 </select>
                 <span className="muted small">
-                  当前 Runner 只接入 Claude Code；Codex/pi 属于 W6。
+                  Pi 使用本机 `pi --mode rpc`；Claude Code 使用 ACP。
                 </span>
               </label>
               <label>
@@ -722,6 +730,7 @@ type StreamView = {
 
 function useAttemptStream(snapshot: RunSnapshot | undefined) {
   const streams = useRef(new Map<string, AttemptStream>());
+  const client = useQueryClient();
   const [, redraw] = useState(0);
   const runId = snapshot?.run.id;
   useEffect(() => {
@@ -734,13 +743,20 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
           streams.current.get(attempt.id) ?? new AttemptStream(attempt.id);
         streams.current.set(attempt.id, stream);
         const [events, transcript] = await Promise.all([
-          api.events(attempt.id, stream.lastSequence),
-          api.transcript(attempt.id, stream.lastChunkSeq),
+          api.events(attempt.id, 0),
+          api.transcript(attempt.id, 0),
         ]);
-        for (const event of events.events ?? [])
-          stream.acceptEvent(RunEventSchema.parse(event));
-        for (const raw of transcript.chunks ?? [])
-          stream.acceptChunk(TranscriptChunkSchema.parse(raw));
+        if (cancelled) return;
+        stream.hydrate({
+          events: events.events.map((event) => RunEventSchema.parse(event)),
+          chunks: transcript.chunks.map((chunk) =>
+            TranscriptChunkSchema.parse(chunk),
+          ),
+          cursor: {
+            eventCursor: attempt.lastSequence,
+            chunkCursor: attempt.lastChunkSeq,
+          },
+        });
       }
       if (!cancelled) redraw((value) => value + 1);
     };
@@ -769,18 +785,33 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
           JSON.parse(String(message.data)),
         );
         if (!parsed.success) return;
+        if (parsed.data.type === 'run') {
+          void client.invalidateQueries({ queryKey: ['run', runId] });
+          return;
+        }
+        const stream =
+          streams.current.get(parsed.data.attemptId) ??
+          new AttemptStream(parsed.data.attemptId);
+        streams.current.set(parsed.data.attemptId, stream);
         if (parsed.data.type === 'event') {
-          const stream =
-            streams.current.get(parsed.data.attemptId) ??
-            new AttemptStream(parsed.data.attemptId);
-          streams.current.set(parsed.data.attemptId, stream);
-          stream.acceptEvent(parsed.data.event);
-          redraw((value) => value + 1);
-        } else if (parsed.data.type === 'transcript') {
-          const stream =
-            streams.current.get(parsed.data.attemptId) ??
-            new AttemptStream(parsed.data.attemptId);
-          streams.current.set(parsed.data.attemptId, stream);
+          const result = stream.acceptEvent(parsed.data.event);
+          if (result === 'gap')
+            void api
+              .events(parsed.data.attemptId, stream.lastSequence)
+              .then((history) => {
+                stream.appendHistory({
+                  events: history.events.map((event) =>
+                    RunEventSchema.parse(event),
+                  ),
+                  chunks: [],
+                  cursor: {
+                    eventCursor: stream.lastSequence,
+                    chunkCursor: stream.lastChunkSeq,
+                  },
+                });
+                redraw((value) => value + 1);
+              });
+        } else {
           const chunk = TranscriptChunkSchema.parse({
             attemptId: parsed.data.attemptId,
             chunkSeq: parsed.data.chunkSeq,
@@ -790,9 +821,25 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
             byteSize: JSON.stringify(parsed.data.frames).length,
             createdAt: new Date().toISOString(),
           });
-          stream.acceptChunk(chunk);
-          redraw((value) => value + 1);
+          const result = stream.acceptChunk(chunk);
+          if (result === 'gap')
+            void api
+              .transcript(parsed.data.attemptId, stream.lastChunkSeq)
+              .then((history) => {
+                stream.appendHistory({
+                  events: [],
+                  chunks: history.chunks.map((item) =>
+                    TranscriptChunkSchema.parse(item),
+                  ),
+                  cursor: {
+                    eventCursor: stream.lastSequence,
+                    chunkCursor: stream.lastChunkSeq,
+                  },
+                });
+                redraw((value) => value + 1);
+              });
         }
+        redraw((value) => value + 1);
       };
       socket.onclose = () => {
         if (!disposed) {
