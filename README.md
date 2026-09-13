@@ -1,6 +1,8 @@
-# Agent Workspace
+# Codeloom
 
-面向小团队的 coding agent 任务台：在一个 Web 应用中登记仓库、创建任务、选一台自己的机器发起 Run，在浏览器里看转写、批准权限、追问、查看每轮 Diff。
+Codeloom 是面向小团队的 coding agent 任务台：在一个 Web 应用中登记仓库、创建任务、选一台自己的机器发起 Run，在浏览器里看转写、批准权限、追问、查看每轮 Diff。
+
+技术标识为兼容性保留：包名 `@agent-workspace/*` 与数据目录 `~/.agent-workspace` 不变。
 
 ## 目标
 

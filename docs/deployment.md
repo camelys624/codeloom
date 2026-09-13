@@ -235,7 +235,7 @@ agent-runner daemon
 
 ```ini
 [Unit]
-Description=Agent Workspace Runner
+Description=Codeloom Runner
 After=network-online.target
 
 [Service]

@@ -59,7 +59,7 @@ function AuthPage() {
   return (
     <main className="auth">
       <section className="card">
-        <h1 className="title">Agent Workspace</h1>
+        <h1 className="title">Codeloom</h1>
         <p className="muted">登录后管理任务、Runner 和多轮 Agent 执行。</p>
         {mutation.error && <ErrorNotice error={mutation.error} />}
         <form
@@ -130,7 +130,7 @@ function Layout() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <h1>Agent Workspace</h1>
+        <h1>Codeloom</h1>
         <nav>
           <NavLink to="/" end>
             Tasks

@@ -81,7 +81,7 @@ export async function migrate(
     throw new Error('A database connection is required');
   }
   const workspace = options.workspace ?? {
-    name: 'Agent Workspace',
+    name: 'Codeloom',
     slug: 'default',
   };
   if (!workspace.name.trim() || !workspace.slug.trim()) {

@@ -7,7 +7,7 @@
 
 ## 1. 产品定位
 
-Agent Workspace 是一个面向小团队的 coding agent 任务台：用户在 Web 应用中登记仓库、创建任务、选一台自己的机器和一个 Agent 配置发起 Run，Runner 在隔离的 git worktree 中启动 Agent，用户在浏览器里看转写、批准权限、追加下一句话、查看每一轮的 Diff，最后把结果落成分支或 PR。
+Codeloom 是一个面向小团队的 coding agent 任务台：用户在 Web 应用中登记仓库、创建任务、选一台自己的机器和一个 Agent 配置发起 Run，Runner 在隔离的 git worktree 中启动 Agent，用户在浏览器里看转写、批准权限、追加下一句话、查看每一轮的 Diff，最后把结果落成分支或 PR。
 
 核心链路：
 
