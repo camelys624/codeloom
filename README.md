@@ -28,6 +28,7 @@ Codeloom 是面向小团队的 coding agent 任务台：在一个 Web 应用中�
 - [决策记录](./docs/decisions.md)
 - [术语表](./docs/glossary.md)
 - [评审问题与处理结果](./docs/open-issues.md)
+- [仓库协作规则](./AGENTS.md)
 - [实现状态与交接](./docs/status.md)
 
 ## 当前实现状态
