@@ -21,7 +21,7 @@
 | argon2id 原生模块冒烟 | `scripts/smoke-native.mjs` | `bun run smoke:native` | 已验证 |
 | 文档与代码类型对照 | `scripts/check-contract-docs.mjs` | `bun run check:contracts`，36 个类型 | 已验证 |
 | Prettier | `.prettierrc.json` | `bun run format:check` | 已验证 |
-| CI | `.github/workflows/ci.yml` | 远程运行 #3 在 GitHub Actions 初始化 PostgreSQL service 时 Docker exit 125，所有验证步骤被跳过；本地基线已通过 | 环境阻塞 |
+| CI | `.github/workflows/ci.yml` | 远程运行 #4 在 GitHub Actions 初始化 PostgreSQL service 时 Docker exit 125；已提交容器 job 方案，等待下一次远程运行 | 环境阻塞 |
 | 本地 PostgreSQL Compose | `infra/local/compose.yml` | `apps/web/server/db/migrate.test.ts` 8 个测试已通过；两次迁移均 `applied: []` | 已验证 |
 
 ### 2.2 `packages/contracts`
@@ -81,8 +81,8 @@
 ### W1 数据库测试跑通与环境
 
 - 前置：无。
-- 当前：本地 Docker Compose PostgreSQL 16 healthy；两次迁移第二次输出 `applied: []`；`apps/web/server/db/migrate.test.ts` 8 个测试全部通过。远程 CI #3 未执行验证步骤，因 GitHub Actions service container 初始化 Docker exit 125 失败。
-- 验收：远程 Actions runner 恢复可创建 PostgreSQL service，或改为不依赖 service container 的可复现 CI 数据库方案后重跑并通过。
+- 当前：本地 Docker Compose PostgreSQL 16 healthy；两次迁移第二次输出 `applied: []`；`apps/web/server/db/migrate.test.ts` 8 个测试全部通过。远程 CI #4 同样在 GitHub Actions service container 初始化 Docker exit 125 失败，已改为容器 job 方案，尚未重跑。
+- 验收：容器 job 方案的远程 Actions 运行完成且通过；若 GitHub runner 仍禁止嵌套 Docker，则改用 PostgreSQL 非容器服务或外部 DATABASE_URL。
 
 ### W5 真实引擎门禁
 
