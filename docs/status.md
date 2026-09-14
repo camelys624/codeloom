@@ -5,8 +5,7 @@
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-
-工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree 和本地 PostgreSQL 集成已验证。Runner 支持按 Profile 选择 `claude-code` 或 `pi`，Pi 通过本机 `pi --mode rpc` 运行，并使用临时 extension 将 filesystem、shell 和审批策略接入 Runner；用户已实测 Pi agent 可以正常调用并取得 agent 返回信息。Runner 终态操作的 worktree 提交、启动阶段取消竞态、stale 审批释放、取消请求重连下发、启动阶段错误分类和自动重试语义已补强。2026-09-14 已执行 Pi 完整门禁：连续 10 Turn、权限批准前后副作用、取消和进程树清理均通过。真实 Claude 门禁仍被上游 429/503 阻塞，真实 PostgreSQL/Runner WebSocket 对账已在现有运行环境中确认 Runner 重连在线，但浏览器断线视觉验收和远程 CI 仍未完成。**阶段 1 的 fake/协议链路和 Pi 完整门禁已完成；M1 仍等待浏览器断线验收、远程 CI 和 Claude 门禁决策。**
+工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree、本地 PostgreSQL、Pi 完整门禁和远程 CI 已验证。Runner 支持按 Profile 选择 `claude-code` 或 `pi`，Pi 通过本机 `pi --mode rpc` 运行，并使用临时 extension 将 filesystem、shell 和审批策略接入 Runner；用户已实测 Pi agent 可以正常调用并取得 agent 返回信息。Runner 终态操作的 worktree 提交、启动阶段取消竞态、stale 审批释放、取消请求重连下发、启动阶段错误分类和自动重试语义已补强。真实 Claude 门禁仍被上游 429/503 阻塞，浏览器 headless 视觉验收受系统缺少 `libnspr4.so` 阻塞。**阶段 1 的 fake/协议链路、Pi 完整门禁和远程 CI 已完成；M1 仅等待 Claude ACP 路径决策和浏览器视觉环境。**
 
 ## 2. 已完成
 
@@ -21,7 +20,7 @@
 | argon2id 原生模块冒烟 | `scripts/smoke-native.mjs` | `bun run smoke:native` | 已验证 |
 | 文档与代码类型对照 | `scripts/check-contract-docs.mjs` | `bun run check:contracts`，36 个类型 | 已验证 |
 | Prettier | `.prettierrc.json` | `bun run format:check` | 已验证 |
-| CI | `.github/workflows/ci.yml` | 远程运行 #4 在 GitHub Actions 初始化 PostgreSQL service 时 Docker exit 125；已提交容器 job 方案，等待下一次远程运行 | 环境阻塞 |
+| CI | `.github/workflows/ci.yml` | 远程运行 #8 通过：宿主 PostgreSQL、build、双迁移、契约检查和排除本机 Pi 进程测试后的 28 个测试通过 | 已验证 |
 | 本地 PostgreSQL Compose | `infra/local/compose.yml` | `apps/web/server/db/migrate.test.ts` 8 个测试已通过；两次迁移均 `applied: []` | 已验证 |
 
 ### 2.2 `packages/contracts`
@@ -38,7 +37,7 @@
 - `migrations/0001_initial.sql`：18 张业务表，租户复合外键贯穿所有表；部分唯一索引保证一个 Run 一个活动 Attempt、一个 AgentProfile 一个被领取的 Attempt；触发器锁死 Run 冻结 spec、终态 Attempt 和审计表；`updated_at` 自动维护。
 - `migrate.ts`：advisory lock 加校验和，一个事务里应用全部待应用迁移并 bootstrap 首个 Workspace；可作 CLI（`bun run db:migrate`）或库函数调用。
 - 2026-09-10 变更：`agent_profiles.engine` CHECK 加 `pi`。
-- 验证：`migrate.test.ts` 8 个测试和全套 `bun run test` 本次均已通过；`bun run db:migrate` 双迁移和远程 CI 仍未执行。
+- 验证：`migrate.test.ts` 8 个测试、远程 CI #8 和全套本地 `bun run test` 均已通过；本地 `bun run db:migrate` 双迁移已验证。
 
 ### 2.4 `packages/agent-adapters`
 
@@ -76,13 +75,13 @@
 
 ## 3. 未完成
 
-按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI 和 Pi 完整门禁已落地；真实 Pi 基础调用和进程验收已通过，客户端首屏 transcript 尾部补拉、断线 gap 补拉、Runner 终态竞态、取消重连控制和启动阶段自动重试已补强；真实 Claude ACP 门禁、浏览器断线视觉/交互验收和远程 CI 仍未完成。
+按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI、Pi 完整门禁和远程 CI 已落地/通过；真实 Pi 基础调用和进程验收已通过，客户端首屏 transcript 尾部补拉、断线 gap 补拉、Runner 终态竞态、取消重连控制和启动阶段自动重试已补强；真实 Claude ACP 门禁和浏览器 headless 视觉验收仍未完成，分别受上游服务和本机缺少 `libnspr4.so` 阻塞。
 
 ### W1 数据库测试跑通与环境
 
 - 前置：无。
-- 当前：本地 Docker Compose PostgreSQL 16 healthy；两次迁移第二次输出 `applied: []`；`apps/web/server/db/migrate.test.ts` 8 个测试全部通过。远程 CI #4 同样在 GitHub Actions service container 初始化 Docker exit 125 失败，已改为容器 job 方案，尚未重跑。
-- 验收：容器 job 方案的远程 Actions 运行完成且通过；若 GitHub runner 仍禁止嵌套 Docker，则改用 PostgreSQL 非容器服务或外部 DATABASE_URL。
+- 当前：本地 Docker Compose PostgreSQL 16 healthy；两次迁移输出 `applied: []`；`apps/web/server/db/migrate.test.ts` 8 个测试、远程 CI #8 的 build/双迁移/contracts/28 个非本机 Pi 进程测试全部通过。
+- 验收：已通过。远程 CI 为宿主 PostgreSQL 方案，Pi 真实 RPC 进程测试仍由本地 `bun run gate:pi` 验收。
 
 ### W5 真实引擎门禁
 
@@ -116,4 +115,4 @@ bun run db:migrate && bun run db:migrate      # 第二次应输出 applied: []
 bun run test                                  # 10 个测试文件，29 个测试；另有 `bun run gate:pi`
 ```
 
-数据库可用并通过上述检查后，执行 W1 的双迁移和完整测试；再按 §3 处理 W5/W6。阶段一可靠性代码收口和 Pi 完整门禁已验证，但浏览器断线验收、Claude ACP 门禁/替代路径决策、远程 CI 和真实服务重启全链路记录仍是阶段一退出条件。
+数据库可用并通过上述检查后，阶段一代码与 Pi 门禁已收口。剩余工作是 Claude ACP 上游恢复后的门禁，或明确接受 Pi 作为阶段一真实 engine，以及安装浏览器 `libnspr4.so` 后补跑视觉断线验收。
