@@ -3,24 +3,16 @@ on: [push, pull_request]
 jobs:
   verify:
     runs-on: ubuntu-latest
-    container:
-      image: node:22-bookworm
-      options: --privileged
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: aw
-          POSTGRES_USER: aw
-          POSTGRES_PASSWORD: aw
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd 'pg_isready -U aw -d aw'
-          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgres://aw:aw@postgres:5432/aw
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
     steps:
+      - name: Start PostgreSQL
+        run: |
+          apt-get update
+          apt-get install -y postgresql postgresql-client
+          service postgresql start
+          su - postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres';\""
+          pg_isready -h 127.0.0.1 -U postgres -d postgres
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
