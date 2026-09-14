@@ -7,7 +7,7 @@
 
 ## 阶段 1：竖切（约 2 周）
 
-目标：一个用户在自己的机器上连接 Runner，创建 Task，发起 Run，在浏览器里看到 Claude Code 的转写，批准一次权限，追问一句，看到两轮 Diff，点完成。
+目标：一个用户在自己的机器上连接 Runner，创建 Task，发起 Run，在浏览器里看到首个真实 engine（当前为 Pi）的转写，批准一次权限，追问一句，看到两轮 Diff，点完成。Claude Code ACP 是独立可选 engine，受外部上游可用性影响，不阻塞阶段 1 的 Pi 竖切验收。
 
 ### 第 1 到 2 天：ACP spike（门禁）
 
@@ -30,7 +30,7 @@
 
 验收：
 
-- ACP spike 结论在第 2 天结束前写入 ADR-018；
+- 首个真实 engine（Pi）门禁结论在阶段 1 退出前写入 ADR-018；Claude ACP 外部依赖单独记录；
 - 同一 Attempt 不会被领取两次；
 - Runner 断网 45 秒以上 Run 变 `lost`，用户从 `last_commit` 重试成功；
 - Runner 进程重启后 Attempt 变 `failed`，worktree 中的改动已提交；
@@ -38,7 +38,9 @@
 - 浏览器断线 30 秒后自动重连，事件与转写无缺口、无重复，快照与游标对账通过（[frontend.md](./frontend.md) §3.3）；
 - 取消在 20 秒内终止进程树；
 - 用户的原始 checkout 在全部测试后没有任何变化；
-- adapter 完成 10 个 Turn、权限往返和取消。
+- Pi adapter 完成 10 个 Turn、权限往返和取消。
+- 用户浏览器验收通过基础生命周期、EnforcementReport、多轮追问、每 Turn Diff、权限批准/拒绝、审批等待、取消、完成、重试、断线重连、事件/transcript 无缺口无重复和硬刷新恢复；
+- patch artifact 对重复内容上传幂等，不因相同 patch SHA 使 Attempt 失败。
 
 ## 阶段 2：完整 Run 体验与可靠性打磨
 

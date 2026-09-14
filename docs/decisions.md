@@ -352,7 +352,12 @@ Runner 无法阻止 Agent 用用户凭据 push。如实标注 `gitPush` enforcem
 
 - 执行命令：`bun run gate:pi`。
 - 结果：连续 10 Turn 上下文连续性通过；权限请求在批准前没有文件副作用，批准后目标文件写入成功；取消返回 `canceled`；Agent 与 detached tool descendant 在 20 秒内清理。
-- 结论：Pi 作为阶段 1 真实 engine 的完整 adapter 门禁通过。Claude ACP 仍保留独立阻塞项，不将 Pi 结果冒充 Claude 门禁结果。
+- 结论：Pi 作为阶段 1 真实 engine 的完整 adapter 门禁通过。用户随后完成浏览器 Run 核心体验验收；Claude ACP 保留为独立外部依赖，不再阻塞 Pi engine 的阶段一结论。
+
+### 2026-09-14 浏览器 Run 核心体验验收
+
+- 用户确认通过：基础生命周期、EnforcementReport、多轮追问、每 Turn Diff、权限批准/拒绝、审批等待、取消、完成、重试、浏览器断线重连、事件/transcript 无缺口无重复、硬刷新恢复。
+- 过程中发现重复 patch 内容上传触发 `artifacts_blob_ref_key`；服务端已改为幂等查找并为新 blob 使用唯一引用，失败 Run 重试后 Attempt 成功进入 `idle`。
 
 ### 2026-09-14 运行环境演练记录
 

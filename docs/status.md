@@ -5,7 +5,7 @@
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree、本地 PostgreSQL、Pi 完整门禁和远程 CI 已验证。Runner 支持按 Profile 选择 `claude-code` 或 `pi`，Pi 通过本机 `pi --mode rpc` 运行，并使用临时 extension 将 filesystem、shell 和审批策略接入 Runner；用户已实测 Pi agent 可以正常调用并取得 agent 返回信息。2026-09-14 浏览器验收发现重复 patch 内容上传触发 `artifacts_blob_ref_key`，已修复 artifact blob 命名/幂等逻辑并通过失败 Run 重试验证。真实 Claude 门禁仍被上游 429/503 阻塞，浏览器 headless 视觉验收受系统缺少 `libnspr4.so` 阻塞。**阶段 1 的 fake/协议链路、Pi 完整门禁和远程 CI 已完成；M1 仅等待 Claude ACP 路径决策和浏览器视觉环境。**
+工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree、本地 PostgreSQL、Pi 完整门禁、远程 CI 和浏览器 Run 流验收已验证。用户已实际验证基础生命周期、EnforcementReport、多轮追问、权限批准/拒绝、审批等待、取消、完成、重试、断线重连、事件/transcript 无缺口无重复和硬刷新恢复；重复 patch artifact 也已修复并通过失败 Run 重试验证。真实 Claude 门禁仍被上游 429/503 阻塞。**阶段 1 的 Pi 真实 engine 验收已完成；M1 的可执行验收条件已满足，Claude ACP 保留为独立外部依赖。**
 
 ## 2. 已完成
 
@@ -21,7 +21,6 @@
 | 文档与代码类型对照 | `scripts/check-contract-docs.mjs` | `bun run check:contracts`，36 个类型 | 已验证 |
 | Prettier | `.prettierrc.json` | `bun run format:check` | 已验证 |
 | CI | `.github/workflows/ci.yml` | 远程运行 #8 通过：宿主 PostgreSQL、build、双迁移、契约检查和排除本机 Pi 进程测试后的 28 个测试通过 | 已验证 |
-| 本地 PostgreSQL Compose | `infra/local/compose.yml` | `apps/web/server/db/migrate.test.ts` 8 个测试已通过；两次迁移均 `applied: []` | 已验证 |
 
 ### 2.2 `packages/contracts`
 
@@ -48,7 +47,7 @@
 - `redaction.ts`：按 engine 的环境变量白名单 `ENGINE_ENV_ALLOWLIST`、按行脱敏 `RedactedLines`、结构化脱敏 `Redactor`。
 - `fake.ts`：脚本化的 fake adapter，只从 `@agent-workspace/agent-adapters/fake` 导入，不进生产入口。
 - `spike.ts`：ADR-018 Claude ACP 门禁程序。
-- 验证：`redaction` 4 个、Claude wire peer 1 个、Pi capability 1 个、Pi RPC 启动 1 个；`bun run gate:pi` 已通过 10 Turn、权限往返、取消和进程清理；真实 Claude 门禁未通过。
+- 验证：`redaction` 4 个、Claude wire peer 1 个、Pi capability 1 个、Pi RPC 启动 1 个；`bun run gate:pi` 已通过 10 Turn、权限往返、取消和进程清理；用户浏览器验收通过；真实 Claude 门禁未通过。
 
 
 ### 2.5 `apps/web/server`
@@ -67,7 +66,7 @@
 
 - Agent Profile 表单可选择 `pi` 或 `claude-code`；Pi 默认使用本机 `pi`，可填写 provider/model pattern。
 - `lib/stream.ts`：按 Attempt 的事件/转写游标、live 消息缓冲、历史 hydrate、gap 补拉与去重。
-- 验证：Vite production build；浏览器流回归测试 2 个通过；本轮补齐快照已有转写时的尾部加载、事件/转写 gap 补拉和事件触发的 Run 快照失效。
+- 验证：Vite production build；浏览器流回归测试 2 个通过；用户实际验证 Run 流断线重连、补拉、去重、硬刷新恢复和核心操作。
 
 ### 2.8 文档
 
@@ -75,7 +74,7 @@
 
 ## 3. 未完成
 
-按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI、Pi 完整门禁和远程 CI 已落地/通过；真实 Pi 基础调用和进程验收已通过，客户端首屏 transcript 尾部补拉、断线 gap 补拉、Runner 终态竞态、取消重连控制、启动阶段自动重试和 artifact 重复内容幂等已补强；真实 Claude ACP 门禁和浏览器 headless 视觉验收仍未完成，分别受上游服务和本机缺少 `libnspr4.so` 阻塞。
+按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI、Pi 完整门禁、浏览器核心验收和远程 CI 已落地/通过；artifact 重复内容幂等已修复并通过重试验证。仅剩真实 Claude ACP 门禁，阻塞来自外部中转站/上游网络，不属于当前代码路径。
 
 ### W1 数据库测试跑通与环境
 
@@ -85,9 +84,10 @@
 
 ### W5 真实引擎门禁
 
-- Claude：上游恢复后跑 `SPIKE_MODEL=opus bun run spike:acp`，结果写入 ADR-018。
+- Claude：上游恢复后可选地运行 `SPIKE_MODEL=opus bun run spike:acp`；当前不阻塞 Pi engine 的阶段 1 验收。
 - Pi：2026-09-14 `bun run gate:pi` 通过：连续 10 Turn、上下文连续性、权限批准前无副作用、批准后副作用发生、取消返回和进程树清理均通过。
-- 验收：Pi 完整门禁已通过；一次成功 prompt 不等于完整门禁，fake adapter 和仅启动 RPC 进程均不算门禁通过。
+- 浏览器：用户已验证 Run 生命周期、EnforcementReport、多轮追问、每 Turn Diff、权限批准/拒绝、审批等待、取消、完成、重试、断线重连、事件/transcript 无缺口无重复和硬刷新恢复。
+- 验收：Pi 真实 engine 和浏览器核心 Run 体验通过；Claude ACP 作为外部依赖单独记录。
 
 ### W6 第二个 engine（阶段 3，ADR-027）
 
@@ -115,4 +115,4 @@ bun run db:migrate && bun run db:migrate      # 第二次应输出 applied: []
 bun run test                                  # 10 个测试文件，29 个测试；另有 `bun run gate:pi`
 ```
 
-数据库可用并通过上述检查后，阶段一代码与 Pi 门禁已收口。剩余工作是 Claude ACP 上游恢复后的门禁，或明确接受 Pi 作为阶段一真实 engine，以及安装浏览器 `libnspr4.so` 后补跑视觉断线验收。
+数据库可用并通过上述检查后，阶段一 Pi engine 代码、浏览器核心体验、可靠性和 CI 验收已收口。Claude ACP 门禁仅在上游恢复后补跑，不阻塞进入阶段二。
