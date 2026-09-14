@@ -5,7 +5,7 @@
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree、本地 PostgreSQL、Pi 完整门禁和远程 CI 已验证。Runner 支持按 Profile 选择 `claude-code` 或 `pi`，Pi 通过本机 `pi --mode rpc` 运行，并使用临时 extension 将 filesystem、shell 和审批策略接入 Runner；用户已实测 Pi agent 可以正常调用并取得 agent 返回信息。Runner 终态操作的 worktree 提交、启动阶段取消竞态、stale 审批释放、取消请求重连下发、启动阶段错误分类和自动重试语义已补强。真实 Claude 门禁仍被上游 429/503 阻塞，浏览器 headless 视觉验收受系统缺少 `libnspr4.so` 阻塞。**阶段 1 的 fake/协议链路、Pi 完整门禁和远程 CI 已完成；M1 仅等待 Claude ACP 路径决策和浏览器视觉环境。**
+工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree、本地 PostgreSQL、Pi 完整门禁和远程 CI 已验证。Runner 支持按 Profile 选择 `claude-code` 或 `pi`，Pi 通过本机 `pi --mode rpc` 运行，并使用临时 extension 将 filesystem、shell 和审批策略接入 Runner；用户已实测 Pi agent 可以正常调用并取得 agent 返回信息。2026-09-14 浏览器验收发现重复 patch 内容上传触发 `artifacts_blob_ref_key`，已修复 artifact blob 命名/幂等逻辑并通过失败 Run 重试验证。真实 Claude 门禁仍被上游 429/503 阻塞，浏览器 headless 视觉验收受系统缺少 `libnspr4.so` 阻塞。**阶段 1 的 fake/协议链路、Pi 完整门禁和远程 CI 已完成；M1 仅等待 Claude ACP 路径决策和浏览器视觉环境。**
 
 ## 2. 已完成
 
@@ -75,7 +75,7 @@
 
 ## 3. 未完成
 
-按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI、Pi 完整门禁和远程 CI 已落地/通过；真实 Pi 基础调用和进程验收已通过，客户端首屏 transcript 尾部补拉、断线 gap 补拉、Runner 终态竞态、取消重连控制和启动阶段自动重试已补强；真实 Claude ACP 门禁和浏览器 headless 视觉验收仍未完成，分别受上游服务和本机缺少 `libnspr4.so` 阻塞。
+按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI、Pi 完整门禁和远程 CI 已落地/通过；真实 Pi 基础调用和进程验收已通过，客户端首屏 transcript 尾部补拉、断线 gap 补拉、Runner 终态竞态、取消重连控制、启动阶段自动重试和 artifact 重复内容幂等已补强；真实 Claude ACP 门禁和浏览器 headless 视觉验收仍未完成，分别受上游服务和本机缺少 `libnspr4.so` 阻塞。
 
 ### W1 数据库测试跑通与环境
 

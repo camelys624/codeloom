@@ -2086,13 +2086,32 @@ export async function buildApp(
         throw Object.assign(new Error('Artifact exceeds kind limit'), {
           statusCode: 413,
         });
-      const blobRef = join('blobs', digest);
+      const existing = await pool.query<Row>(
+        `SELECT id FROM artifacts
+         WHERE workspace_id = $1 AND attempt_id = $2
+           AND turn_id IS NOT DISTINCT FROM $3
+           AND kind = $4 AND sha256 = $5
+         ORDER BY created_at, id LIMIT 1`,
+        [
+          runner.workspaceId,
+          attempt.id,
+          input.turnId ?? null,
+          input.kind,
+          input.sha256.toLowerCase(),
+        ],
+      );
+      if (existing.rows[0]) {
+        reply.code(200).send({ artifactId: String(existing.rows[0].id) });
+        return;
+      }
+      const blobRef = join('blobs', `${digest}-${randomUUID()}`);
       const blobPath = join(config.dataDir, blobRef);
       await mkdir(dirname(blobPath), { recursive: true });
       if (tempPath) await rename(tempPath, blobPath);
       const row = one(
         await pool.query<Row>(
-          `INSERT INTO artifacts (workspace_id, run_id, attempt_id, turn_id, kind, blob_ref, size_bytes, sha256, mime_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+          `INSERT INTO artifacts (workspace_id, run_id, attempt_id, turn_id, kind, blob_ref, size_bytes, sha256, mime_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
           [
             runner.workspaceId,
             attempt.run_id,
