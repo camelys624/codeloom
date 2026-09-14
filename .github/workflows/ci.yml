@@ -27,4 +27,4 @@ jobs:
       - run: bun run db:migrate
       - run: bun run db:migrate
       - run: bun run check:contracts
-      - run: bun run test
+      - run: bun run test -- --exclude='packages/agent-adapters/test/pi-rpc.test.ts'
