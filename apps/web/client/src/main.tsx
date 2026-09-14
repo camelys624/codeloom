@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Link,
@@ -24,10 +24,21 @@ import {
   type RunEvent,
   type Runner,
   type Task,
+  type TaskStatus,
   type TranscriptChunk,
 } from '@agent-workspace/contracts';
 import { api, ApiError, type RunSnapshot } from './lib/api.js';
 import { AttemptStream } from './lib/stream.js';
+import {
+  canMoveTask,
+  sortTasks,
+  TASK_COLUMNS,
+  TASK_PRIORITY_LABELS,
+  TASK_PRIORITIES,
+  TASK_STATUS_LABELS,
+  taskMatchesFilters,
+  type TaskPriority,
+} from './lib/tasks.js';
 import './styles.css';
 
 const queryClient = new QueryClient({
@@ -121,34 +132,207 @@ function AuthPage() {
 
 function Layout() {
   const client = useQueryClient();
+  const navigate = useNavigate();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const logout = useMutation({
     mutationFn: api.logout,
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['me'] });
     },
   });
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem('codeloom-theme');
+    if (savedTheme === 'dark') setTheme('dark');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteOpen(true);
+      }
+      if (event.key === 'Escape') setPaletteOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem('codeloom-theme', theme);
+  }, [theme]);
   return (
-    <div className="shell">
+    <div className={`shell${sidebarCollapsed ? ' shell-collapsed' : ''}`}>
       <aside className="sidebar">
-        <h1>Codeloom</h1>
-        <nav>
-          <NavLink to="/" end>
-            Tasks
+        <div className="brand-row">
+          <Link className="brand" to="/">
+            <span className="brand-mark">C</span>
+            {!sidebarCollapsed && <span>Codeloom</span>}
+          </Link>
+          <button
+            className="icon-button sidebar-toggle"
+            aria-label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+          >
+            {sidebarCollapsed ? '→' : '←'}
+          </button>
+        </div>
+        <nav className="sidebar-nav" aria-label="主导航">
+          <NavLink className="nav-item" to="/" end>
+            <span className="nav-icon">▦</span>
+            {!sidebarCollapsed && <span>Tasks</span>}
           </NavLink>
-          <NavLink to="/runners">Runners</NavLink>
+          <NavLink className="nav-item" to="/runners">
+            <span className="nav-icon">◈</span>
+            {!sidebarCollapsed && <span>Runners</span>}
+          </NavLink>
         </nav>
+        {!sidebarCollapsed && (
+          <div className="sidebar-section">
+            <span className="sidebar-label">Workspace</span>
+            <span className="workspace-switcher">
+              Personal workspace <span>⌄</span>
+            </span>
+          </div>
+        )}
+        <div className="sidebar-bottom">
+          <button className="nav-item" onClick={() => setPaletteOpen(true)}>
+            <span className="nav-icon">⌘</span>
+            {!sidebarCollapsed && (
+              <>
+                <span>Command menu</span>
+                <kbd>⌘K</kbd>
+              </>
+            )}
+          </button>
+          <button
+            className="nav-item"
+            onClick={() =>
+              setTheme((value) => (value === 'light' ? 'dark' : 'light'))
+            }
+          >
+            <span className="nav-icon">{theme === 'light' ? '☾' : '☼'}</span>
+            {!sidebarCollapsed && (
+              <span>{theme === 'light' ? 'Dark mode' : 'Light mode'}</span>
+            )}
+          </button>
+          {!sidebarCollapsed && (
+            <button className="profile-button" onClick={() => logout.mutate()}>
+              <span className="avatar">R</span>
+              <span className="profile-copy">
+                <strong>Robbie</strong>
+                <small>Personal</small>
+              </span>
+              <span className="profile-more">⋯</span>
+            </button>
+          )}
+        </div>
       </aside>
       <div className="main">
         <header className="topbar">
-          <span className="muted">阶段 1 · 本地 Runner</span>
-          <button className="secondary" onClick={() => logout.mutate()}>
-            退出
-          </button>
+          <div className="breadcrumbs">
+            <span className="muted">Workspace</span>
+            <span>/</span>
+            <strong>Tasks</strong>
+          </div>
+          <div className="topbar-actions">
+            <button
+              className="search-trigger"
+              onClick={() => setPaletteOpen(true)}
+            >
+              <span>⌕</span> Search <kbd>⌘K</kbd>
+            </button>
+            <button className="icon-button" aria-label="通知">
+              ♢
+            </button>
+            <button
+              className="avatar avatar-small"
+              aria-label="用户菜单"
+              onClick={() => logout.mutate()}
+            >
+              R
+            </button>
+          </div>
         </header>
         <main className="content">
           <Outlet />
         </main>
       </div>
+      {paletteOpen && (
+        <CommandPalette
+          onClose={() => setPaletteOpen(false)}
+          onNavigate={(path) => {
+            navigate(path);
+            setPaletteOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CommandPalette({
+  onClose,
+  onNavigate,
+}: {
+  onClose: () => void;
+  onNavigate: (path: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const commands = [
+    { label: 'Open tasks', detail: 'View the task board', path: '/' },
+    {
+      label: 'Open runners',
+      detail: 'Manage runners and profiles',
+      path: '/runners',
+    },
+  ].filter((command) =>
+    `${command.label} ${command.detail}`
+      .toLocaleLowerCase()
+      .includes(query.toLocaleLowerCase()),
+  );
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="command-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command menu"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <input
+          autoFocus
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search commands…"
+        />
+        <div className="command-list">
+          {commands.map((command) => (
+            <button
+              className="command-item"
+              key={command.path}
+              onClick={() => onNavigate(command.path)}
+            >
+              <span className="command-symbol">↗</span>
+              <span>
+                <strong>{command.label}</strong>
+                <small>{command.detail}</small>
+              </span>
+              <span className="muted">Enter</span>
+            </button>
+          ))}
+          {commands.length === 0 && (
+            <p className="empty-state">No commands found.</p>
+          )}
+        </div>
+        <footer>
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> Navigate
+          </span>
+          <span>
+            <kbd>Esc</kbd> Close
+          </span>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -159,103 +343,354 @@ function TasksPage() {
     queryKey: ['repositories'],
     queryFn: api.repositories,
   });
+  const client = useQueryClient();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [repositoryId, setRepositoryId] = useState('');
-  const client = useQueryClient();
+  const [priority, setPriority] = useState<TaskPriority | ''>('');
+  const [query, setQuery] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState<TaskPriority | 'all'>(
+    'all',
+  );
+  const [view, setView] = useState<'board' | 'list'>('board');
+  const [createOpen, setCreateOpen] = useState(false);
   const create = useMutation({
     mutationFn: () =>
       api.createTask({
         title,
         description,
+        priority: priority || undefined,
         repositoryId: repositoryId || null,
       }),
     onSuccess: () => {
       setTitle('');
       setDescription('');
+      setPriority('');
       setRepositoryId('');
+      setCreateOpen(false);
       void client.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
   if (tasks.isPending || repositories.isPending) return <p>加载任务…</p>;
   if (tasks.error || repositories.error)
     return <ErrorNotice error={tasks.error ?? repositories.error} />;
+  const visibleTasks = sortTasks(
+    tasks.data.filter((task) =>
+      taskMatchesFilters(task, query, priorityFilter),
+    ),
+  );
   return (
-    <div className="grid">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+    <div className="tasks-page">
+      <section className="page-heading">
         <div>
-          <h2 className="title">Tasks</h2>
-          <p className="muted">任务是长期工作意图；Run 承载一次执行。</p>
+          <span className="eyebrow">Workspace</span>
+          <h1 className="page-title">Tasks</h1>
+          <p className="page-subtitle">A focused space for your team's work.</p>
         </div>
-        <Link className="badge" to="/runners">
-          配置 Runner
-        </Link>
-      </div>
-      <section className="card">
-        <h3>创建任务</h3>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            create.mutate();
-          }}
-        >
-          <label>
-            标题
+        <button className="primary-action" onClick={() => setCreateOpen(true)}>
+          <span>＋</span> New task
+        </button>
+      </section>
+      <section className="board-toolbar">
+        <div className="toolbar-left">
+          <label className="board-search">
+            <span>⌕</span>
             <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              required
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter tasks…"
             />
           </label>
-          <label>
-            描述
-            <textarea
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </label>
-          <label>
-            Repository
-            <select
-              value={repositoryId}
-              onChange={(event) => setRepositoryId(event.target.value)}
+          <div className="filter-chips">
+            <button
+              className={`filter-chip${priorityFilter === 'all' ? ' selected' : ''}`}
+              onClick={() => setPriorityFilter('all')}
             >
-              <option value="">不绑定</option>
-              {repositories.data.map((repository) => (
-                <option key={repository.id} value={repository.id}>
-                  {repository.name} ({repository.defaultRef})
-                </option>
-              ))}
-            </select>
-          </label>
-          <div>
-            <button disabled={create.isPending}>创建</button>
+              All tasks <span>{tasks.data.length}</span>
+            </button>
+            {TASK_PRIORITIES.map((value) => (
+              <button
+                className={`filter-chip priority-${value}${priorityFilter === value ? ' selected' : ''}`}
+                key={value}
+                onClick={() => setPriorityFilter(value)}
+              >
+                <span className="priority-dot" />
+                {TASK_PRIORITY_LABELS[value]}
+              </button>
+            ))}
           </div>
-        </form>
-        {create.error && <ErrorNotice error={create.error} />}
+        </div>
+        <div className="view-toggle">
+          <button
+            className={view === 'board' ? 'active' : ''}
+            onClick={() => setView('board')}
+          >
+            ▦ Board
+          </button>
+          <button
+            className={view === 'list' ? 'active' : ''}
+            onClick={() => setView('list')}
+          >
+            ☷ List
+          </button>
+        </div>
       </section>
-      <section className="list">
-        {tasks.data.length === 0 ? (
-          <div className="card muted">还没有任务。</div>
-        ) : (
-          tasks.data.map((task) => <TaskRow key={task.id} task={task} />)
-        )}
-      </section>
+      {view === 'board' ? (
+        <TaskBoard
+          tasks={visibleTasks}
+          onMove={(task, status) => {
+            if (!canMoveTask(task, status) || task.status === status) return;
+            void api
+              .updateTask(task.id, { revision: task.revision, status })
+              .then(() => client.invalidateQueries({ queryKey: ['tasks'] }));
+          }}
+        />
+      ) : (
+        <TaskList tasks={visibleTasks} />
+      )}
+      {createOpen && (
+        <CreateTaskDialog
+          title={title}
+          description={description}
+          priority={priority}
+          repositoryId={repositoryId}
+          repositories={repositories.data}
+          pending={create.isPending}
+          error={create.error}
+          onTitle={setTitle}
+          onDescription={setDescription}
+          onPriority={setPriority}
+          onRepository={setRepositoryId}
+          onClose={() => setCreateOpen(false)}
+          onSubmit={() => create.mutate()}
+        />
+      )}
     </div>
   );
 }
 
-function TaskRow({ task }: { task: Task }) {
+function TaskBoard({
+  tasks,
+  onMove,
+}: {
+  tasks: Task[];
+  onMove: (task: Task, status: TaskStatus) => void;
+}) {
   return (
-    <Link className="list-item" to={`/tasks/${task.id}`}>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <strong>{task.title}</strong>
-        <span className="badge">{task.status}</span>
+    <div className="task-board">
+      {TASK_COLUMNS.map((status) => {
+        const columnTasks = tasks.filter((task) => task.status === status);
+        return (
+          <section className="task-column" key={status}>
+            <header>
+              <span className={`column-dot column-${status}`} />
+              <h2>{TASK_STATUS_LABELS[status]}</h2>
+              <span className="column-count">{columnTasks.length}</span>
+              <button
+                className="column-menu"
+                aria-label={`${TASK_STATUS_LABELS[status]} menu`}
+              >
+                ⋯
+              </button>
+            </header>
+            <div className="task-column-body">
+              {columnTasks.map((task) => (
+                <TaskCard key={task.id} task={task} onMove={onMove} />
+              ))}
+              {columnTasks.length === 0 && (
+                <div className="empty-column">No tasks</div>
+              )}
+            </div>
+            <button className="add-task-inline">
+              <span>＋</span> Add task
+            </button>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskList({ tasks }: { tasks: Task[] }) {
+  return (
+    <section className="task-list-view">
+      {tasks.map((task) => (
+        <TaskCard key={task.id} task={task} />
+      ))}
+      {tasks.length === 0 && (
+        <div className="empty-state">No tasks match these filters.</div>
+      )}
+    </section>
+  );
+}
+
+function TaskCard({
+  task,
+  onMove,
+}: {
+  task: Task;
+  onMove?: (task: Task, status: TaskStatus) => void;
+}) {
+  return (
+    <Link className="task-card" to={`/tasks/${task.id}`}>
+      <div className="task-card-top">
+        <span
+          className={`priority-indicator priority-${task.priority ?? 'none'}`}
+          aria-label={
+            task.priority ? TASK_PRIORITY_LABELS[task.priority] : 'No priority'
+          }
+        />
+        {task.priority && (
+          <span className="task-priority">
+            {TASK_PRIORITY_LABELS[task.priority]}
+          </span>
+        )}
+        <span className="task-id">
+          {task.id.replace(/^tsk_/, '#').slice(0, 9)}
+        </span>
       </div>
-      <p className="muted small">
-        {task.description || '无描述'} · revision {task.revision}
-      </p>
+      <strong className="task-card-title">{task.title}</strong>
+      {task.description && <p>{task.description}</p>}
+      <div className="task-card-footer">
+        <span className="task-assignee">R</span>
+        <span className="task-revision">↻ {task.revision}</span>
+        {onMove && (
+          <select
+            aria-label="Change task status"
+            value={task.status}
+            onClick={(event) => event.preventDefault()}
+            onChange={(event) => {
+              event.preventDefault();
+              onMove(task, event.target.value as TaskStatus);
+            }}
+          >
+            {TASK_COLUMNS.map((status) => (
+              <option key={status} value={status}>
+                {TASK_STATUS_LABELS[status]}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
     </Link>
+  );
+}
+
+function CreateTaskDialog({
+  title,
+  description,
+  priority,
+  repositoryId,
+  repositories,
+  pending,
+  error,
+  onTitle,
+  onDescription,
+  onPriority,
+  onRepository,
+  onClose,
+  onSubmit,
+}: {
+  title: string;
+  description: string;
+  priority: TaskPriority | '';
+  repositoryId: string;
+  repositories: Awaited<ReturnType<typeof api.repositories>>;
+  pending: boolean;
+  error: unknown;
+  onTitle: (value: string) => void;
+  onDescription: (value: string) => void;
+  onPriority: (value: TaskPriority | '') => void;
+  onRepository: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="dialog card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create task"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-heading">
+          <div>
+            <span className="eyebrow">New item</span>
+            <h2>Create task</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </div>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <label>
+            Title
+            <input
+              autoFocus
+              value={title}
+              onChange={(event) => onTitle(event.target.value)}
+              required
+              placeholder="What needs to be done?"
+            />
+          </label>
+          <label>
+            Description
+            <textarea
+              value={description}
+              onChange={(event) => onDescription(event.target.value)}
+              placeholder="Add context for the task…"
+            />
+          </label>
+          <div className="grid two">
+            <label>
+              Priority
+              <select
+                value={priority}
+                onChange={(event) =>
+                  onPriority(event.target.value as TaskPriority | '')
+                }
+              >
+                <option value="">No priority</option>
+                {TASK_PRIORITIES.map((value) => (
+                  <option value={value} key={value}>
+                    {TASK_PRIORITY_LABELS[value]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Repository
+              <select
+                value={repositoryId}
+                onChange={(event) => onRepository(event.target.value)}
+              >
+                <option value="">Not linked</option>
+                {repositories.map((repository) => (
+                  <option key={repository.id} value={repository.id}>
+                    {repository.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {error instanceof Error && <ErrorNotice error={error} />}
+          <div className="dialog-actions">
+            <button type="button" className="secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" disabled={pending}>
+              {pending ? 'Creating…' : 'Create task'}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 

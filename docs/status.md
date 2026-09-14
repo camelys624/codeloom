@@ -1,11 +1,11 @@
 # 实现状态与交接
 
-- 日期：2026-09-13
-- 对应文档：0.6 加 ADR-027
+- 日期：2026-09-14
+- 对应文档：0.6 加 ADR-027；阶段 2 首个 UI slice
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree、本地 PostgreSQL、Pi 完整门禁、远程 CI 和浏览器 Run 流验收已验证。用户已实际验证基础生命周期、EnforcementReport、多轮追问、权限批准/拒绝、审批等待、取消、完成、重试、断线重连、事件/transcript 无缺口无重复和硬刷新恢复；重复 patch artifact 也已修复并通过失败 Run 重试验证。真实 Claude 门禁仍被上游 429/503 阻塞。**阶段 1 的 Pi 真实 engine 验收已完成；M1 的可执行验收条件已满足，Claude ACP 保留为独立外部依赖。**
+阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 首个 UI slice 已落地到独立分支：Circle 借鉴的应用壳、可折叠 Sidebar、主题切换、Command Palette、Task 看板、筛选 chips、优先级和用户可用的状态迁移入口。服务端仍是 PostgreSQL 唯一事实，所有 Task 状态更新继续通过已有 revision 乐观并发接口。
 
 ## 2. 已完成
 
@@ -71,6 +71,14 @@
 ### 2.8 文档
 
 0.6 全套加 ADR-027（多引擎接口面与接入顺序）。2026-09-13 新增 Pi 基础真实调用、Runner 终态/重连控制、客户端流恢复和自动重试收口记录。`data-and-events.md` 与 `runner-agent-protocol.md` 记录创建 Run 时由 Runner 解析本地 `baseRef`、冻结 `baseCommitSha` 以及 ref 解析失败语义。`check:contracts` 保证 domain-model.md 与 runner-agent-protocol.md 里的 ts 类型块与代码一致，改类型必须同时改文档。
+
+### 2.9 阶段 2 首个 UI slice
+
+- `apps/web/client/src/main.tsx`：Circle-inspired 应用壳、可折叠 Sidebar、顶部搜索入口、Command Palette（`⌘K` / `Ctrl-K`）、主题切换和 Task board/list 视图。
+- `apps/web/client/src/lib/tasks.ts`：Task 状态列、优先级标签、过滤、排序和用户状态迁移规则；状态迁移复用 `packages/contracts` 的服务端状态机。
+- Task 看板：按 backlog、todo、in_progress、needs_review、done、canceled 分列；支持标题/描述搜索、优先级 chips、优先级创建和状态更新；创建任务使用现有 REST schema，状态更新携带 revision。
+- `apps/web/client/test/task-board.test.ts`：过滤、优先级排序不修改 Query 结果、合法/非法状态迁移的行为回归。
+- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bunx vitest run apps/web/client/test/task-board.test.ts`（3 tests）和 `bun run format` 后的 `git diff --check` 已通过。生产构建的 Zod 注释告警来自依赖包，不影响产物。
 
 ## 3. 未完成
 
