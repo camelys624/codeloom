@@ -778,6 +778,7 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
   const streams = useRef(new Map<string, AttemptStream>());
   const client = useQueryClient();
   const [, redraw] = useState(0);
+  const attemptIds = snapshot?.attempts.map((attempt) => attempt.id).join(',');
   const runId = snapshot?.run.id;
   useEffect(() => {
     if (!snapshot || !runId) return;
@@ -788,9 +789,13 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
         const stream =
           streams.current.get(attempt.id) ?? new AttemptStream(attempt.id);
         streams.current.set(attempt.id, stream);
+        const transcriptRequest =
+          attempt.lastChunkSeq > 0
+            ? api.transcriptBefore(attempt.id, attempt.lastChunkSeq + 1)
+            : api.transcript(attempt.id, 0);
         const [events, transcript] = await Promise.all([
           api.events(attempt.id, 0),
-          api.transcript(attempt.id, 0),
+          transcriptRequest,
         ]);
         if (cancelled) return;
         stream.hydrate({
@@ -810,13 +815,51 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
     return () => {
       cancelled = true;
     };
-  }, [runId, snapshot]);
+  }, [runId, attemptIds]);
   useEffect(() => {
     if (!runId) return;
     let socket: WebSocket | undefined;
     let timer: number | undefined;
-    let delay = 1_000;
     let disposed = false;
+    const reconnectSnapshot = () => {
+      void client.invalidateQueries({ queryKey: ['run', runId] });
+    };
+    let delay = 1_000;
+    const backfillEvents = async (stream: AttemptStream) => {
+      try {
+        const history = await api.events(stream.attemptId, stream.lastSequence);
+        stream.appendHistory({
+          events: history.events.map((event) => RunEventSchema.parse(event)),
+          chunks: [],
+          cursor: {
+            eventCursor: stream.lastSequence,
+            chunkCursor: stream.lastChunkSeq,
+          },
+        });
+      } catch {
+        reconnectSnapshot();
+      }
+    };
+    const backfillTranscript = async (stream: AttemptStream) => {
+      try {
+        const history = await api.transcript(
+          stream.attemptId,
+          stream.lastChunkSeq,
+        );
+        stream.appendHistory({
+          events: [],
+          chunks: history.chunks.map((item) =>
+            TranscriptChunkSchema.parse(item),
+          ),
+          cursor: {
+            eventCursor: stream.lastSequence,
+            chunkCursor: stream.lastChunkSeq,
+          },
+        });
+      } catch {
+        reconnectSnapshot();
+      }
+    };
     const connect = () => {
       if (disposed) return;
       socket = new WebSocket(
@@ -825,14 +868,19 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
       socket.onopen = () => {
         delay = 1_000;
         socket?.send(JSON.stringify({ type: 'subscribe', runId }));
+        reconnectSnapshot();
       };
       socket.onmessage = (message) => {
-        const parsed = BrowserServerMessageSchema.safeParse(
-          JSON.parse(String(message.data)),
-        );
+        let raw: unknown;
+        try {
+          raw = JSON.parse(String(message.data));
+        } catch {
+          return;
+        }
+        const parsed = BrowserServerMessageSchema.safeParse(raw);
         if (!parsed.success) return;
         if (parsed.data.type === 'run') {
-          void client.invalidateQueries({ queryKey: ['run', runId] });
+          reconnectSnapshot();
           return;
         }
         const stream =
@@ -841,22 +889,11 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
         streams.current.set(parsed.data.attemptId, stream);
         if (parsed.data.type === 'event') {
           const result = stream.acceptEvent(parsed.data.event);
+          reconnectSnapshot();
           if (result === 'gap')
-            void api
-              .events(parsed.data.attemptId, stream.lastSequence)
-              .then((history) => {
-                stream.appendHistory({
-                  events: history.events.map((event) =>
-                    RunEventSchema.parse(event),
-                  ),
-                  chunks: [],
-                  cursor: {
-                    eventCursor: stream.lastSequence,
-                    chunkCursor: stream.lastChunkSeq,
-                  },
-                });
-                redraw((value) => value + 1);
-              });
+            void backfillEvents(stream).then(() =>
+              redraw((value) => value + 1),
+            );
         } else {
           const chunk = TranscriptChunkSchema.parse({
             attemptId: parsed.data.attemptId,
@@ -869,21 +906,9 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
           });
           const result = stream.acceptChunk(chunk);
           if (result === 'gap')
-            void api
-              .transcript(parsed.data.attemptId, stream.lastChunkSeq)
-              .then((history) => {
-                stream.appendHistory({
-                  events: [],
-                  chunks: history.chunks.map((item) =>
-                    TranscriptChunkSchema.parse(item),
-                  ),
-                  cursor: {
-                    eventCursor: stream.lastSequence,
-                    chunkCursor: stream.lastChunkSeq,
-                  },
-                });
-                redraw((value) => value + 1);
-              });
+            void backfillTranscript(stream).then(() =>
+              redraw((value) => value + 1),
+            );
         }
         redraw((value) => value + 1);
       };

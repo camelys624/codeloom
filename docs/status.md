@@ -6,7 +6,7 @@
 
 ## 1. 一句话状态
 
-工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree 和本地 PostgreSQL 集成已验证。Runner 支持按 Profile 选择 `claude-code` 或 `pi`，Pi 通过本机 `pi --mode rpc` 运行，并使用临时 extension 将 filesystem、shell 和审批策略接入 Runner；真实 Claude 门禁仍被上游 429/503 阻塞。**阶段 1 的 fake/协议链路已完成，真实 Pi Run 仍需用户提供可用 provider 凭据后验收。**
+工具链、类型契约、数据库 schema、Fastify 服务端、Runner 守护进程、Vite React 前端、Claude Code ACP 适配器和 Pi RPC 适配器已落地；类型、构建、契约、静态托管、Git worktree 和本地 PostgreSQL 集成已验证。Runner 支持按 Profile 选择 `claude-code` 或 `pi`，Pi 通过本机 `pi --mode rpc` 运行，并使用临时 extension 将 filesystem、shell 和审批策略接入 Runner；用户已实测 Pi agent 可以正常调用并取得 agent 返回信息。Runner 终态操作的 worktree 提交、启动阶段取消竞态、stale 审批释放、取消请求重连下发、启动阶段错误分类和自动重试语义已补强。2026-09-14 已执行 Pi 完整门禁：连续 10 Turn、权限批准前后副作用、取消和进程树清理均通过。真实 Claude 门禁仍被上游 429/503 阻塞，真实 PostgreSQL/Runner WebSocket 对账已在现有运行环境中确认 Runner 重连在线，但浏览器断线视觉验收和远程 CI 仍未完成。**阶段 1 的 fake/协议链路和 Pi 完整门禁已完成；M1 仍等待浏览器断线验收、远程 CI 和 Claude 门禁决策。**
 
 ## 2. 已完成
 
@@ -22,7 +22,7 @@
 | 文档与代码类型对照 | `scripts/check-contract-docs.mjs` | `bun run check:contracts`，36 个类型 | 已验证 |
 | Prettier | `.prettierrc.json` | `bun run format:check` | 已验证 |
 | CI | `.github/workflows/ci.yml` | 本地提交已建立；远程 CI 从未运行 | 未验证 |
-| 本地 PostgreSQL Compose | `infra/local/compose.yml` | 需要 Docker | 未验证 |
+| 本地 PostgreSQL Compose | `infra/local/compose.yml` | `apps/web/server/db/migrate.test.ts` 8 个测试已通过；远程 CI 未执行 | 部分验证 |
 
 ### 2.2 `packages/contracts`
 
@@ -31,7 +31,7 @@
 - 位置：`packages/contracts/src/`，入口 `index.ts`。
 - 有界 JSON 校验 `isBoundedJson`（`validation.ts`）防循环引用、getter、深度与字节数，测试覆盖。
 - 2026-09-10 变更（ADR-027）：`engine` 加 `pi`；新增 `AgentProtocol = 'acp' | 'sdk' | 'rpc'`。
-- 验证：`packages/contracts/test/contracts.test.ts` 8 个测试，已验证。
+- 验证：`packages/contracts/test/contracts.test.ts` 9 个测试，已验证。
 
 ### 2.3 `apps/web/server/db`
 
@@ -49,7 +49,7 @@
 - `redaction.ts`：按 engine 的环境变量白名单 `ENGINE_ENV_ALLOWLIST`、按行脱敏 `RedactedLines`、结构化脱敏 `Redactor`。
 - `fake.ts`：脚本化的 fake adapter，只从 `@agent-workspace/agent-adapters/fake` 导入，不进生产入口。
 - `spike.ts`：ADR-018 Claude ACP 门禁程序。
-- 验证：`redaction` 4 个、Claude wire peer 1 个、Pi capability 1 个、Pi RPC 启动 1 个；真实 Claude 门禁未通过，Pi 真实 prompt 仍需 provider 可用。
+- 验证：`redaction` 4 个、Claude wire peer 1 个、Pi capability 1 个、Pi RPC 启动 1 个；`bun run gate:pi` 已通过 10 Turn、权限往返、取消和进程清理；真实 Claude 门禁未通过。
 
 
 ### 2.5 `apps/web/server`
@@ -60,23 +60,23 @@
 ### 2.6 `apps/runner` 与 `packages/git-worktree`
 
 - `apps/runner/src/cli.ts`：`connect`、`repo add`、`daemon`、`status`；凭据 0600、数据目录 0700。
-- `apps/runner/src/daemon.ts`：Runner hello/status、15 秒心跳、领取、按 Profile 选择 Claude/Pi adapter、控制消息（含 `attempt.close`）、worktree 与每 Turn commit、事件/转写 outbox、ack/nack 重发、stale 处理；持久化活跃 Attempt 元数据，重启后先提交 worktree 再发 `agent_crashed`。
+- `apps/runner/src/daemon.ts`：Runner hello/status、15 秒心跳、领取、按 Profile 选择 Claude/Pi adapter、控制消息（含 `attempt.close`）、worktree 与每 Turn commit、事件/转写 outbox、ack/nack 重发、stale 处理；持久化活跃 Attempt 元数据，重启后先提交 worktree 再发 `agent_crashed`；启动阶段收到取消/完成请求时，在 worktree 创建后执行对应终态操作；Runner 重连后消费服务端 hello 中的取消控制。
 - `packages/git-worktree/src/index.ts`：隔离 worktree、`baseRef` 的本地 commit 解析、每 Turn commit、diff stats 和 unified patch。
-- 验证：`bun run typecheck`；临时 git 仓库冒烟验证 worktree、commit、diff stats 和 patch；临时状态/outbox 冒烟验证并发写入、ack 和重启状态读取；Runner close 回归测试通过。
+- 验证：`bun run typecheck`、全套 `bun run test`；临时 git 仓库冒烟验证 worktree、commit、diff stats 和 patch；Runner close 回归测试通过。
 
 ### 2.7 `apps/web/client`
 
 - Agent Profile 表单可选择 `pi` 或 `claude-code`；Pi 默认使用本机 `pi`，可填写 provider/model pattern。
 - `lib/stream.ts`：按 Attempt 的事件/转写游标、live 消息缓冲、历史 hydrate、gap 补拉与去重。
-- 验证：Vite production build；浏览器流回归测试 2 个通过。
+- 验证：Vite production build；浏览器流回归测试 2 个通过；本轮补齐快照已有转写时的尾部加载、事件/转写 gap 补拉和事件触发的 Run 快照失效。
 
 ### 2.8 文档
 
-0.6 全套加 ADR-027（多引擎接口面与接入顺序）。`data-and-events.md` 与 `runner-agent-protocol.md` 记录创建 Run 时由 Runner 解析本地 `baseRef`、冻结 `baseCommitSha` 以及 ref 解析失败语义。`check:contracts` 保证 domain-model.md 与 runner-agent-protocol.md 里的 ts 类型块与代码一致，改类型必须同时改文档。
+0.6 全套加 ADR-027（多引擎接口面与接入顺序）。2026-09-13 新增 Pi 基础真实调用、Runner 终态/重连控制、客户端流恢复和自动重试收口记录。`data-and-events.md` 与 `runner-agent-protocol.md` 记录创建 Run 时由 Runner 解析本地 `baseRef`、冻结 `baseCommitSha` 以及 ref 解析失败语义。`check:contracts` 保证 domain-model.md 与 runner-agent-protocol.md 里的 ts 类型块与代码一致，改类型必须同时改文档。
 
 ## 3. 未完成
 
-按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch 和 Profile UI 已落地；真实 Pi provider Run、真实 Claude ACP 门禁和远程 CI 仍未完成。
+按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI 和 Pi 完整门禁已落地；真实 Pi 基础调用和进程验收已通过，客户端首屏 transcript 尾部补拉、断线 gap 补拉、Runner 终态竞态、取消重连控制和启动阶段自动重试已补强；真实 Claude ACP 门禁、浏览器断线视觉/交互验收和远程 CI 仍未完成。
 
 ### W1 数据库测试跑通与环境
 
@@ -88,12 +88,12 @@
 ### W5 真实引擎门禁
 
 - Claude：上游恢复后跑 `SPIKE_MODEL=opus bun run spike:acp`，结果写入 ADR-018。
-- Pi：本机 `pi` 0.85.1 的 RPC 进程启动和 `get_state` 已验证；需要 provider 凭据可用后执行真实 prompt、权限审批、取消、连续 10 Turn 和进程清理。
-- 验收：roadmap 阶段 1 的真实引擎条目；fake adapter 和仅启动 RPC 进程均不算门禁通过。
+- Pi：2026-09-14 `bun run gate:pi` 通过：连续 10 Turn、上下文连续性、权限批准前无副作用、批准后副作用发生、取消返回和进程树清理均通过。
+- 验收：Pi 完整门禁已通过；一次成功 prompt 不等于完整门禁，fake adapter 和仅启动 RPC 进程均不算门禁通过。
 
 ### W6 第二个 engine（阶段 3，ADR-027）
 
-- 已提前落地 Pi adapter 的最小真实 RPC 接入；仍需在真实 Pi Run 验收后补齐工具事件映射、真实权限往返和完整门禁记录。
+- 已提前落地 Pi adapter 的最小真实 RPC 接入；基础真实调用和阶段 1 完整 Pi 门禁已验证。仍需补齐完整工具事件记录和长期真实 Run 记录。
 
 ## 4. 已知问题
 
@@ -114,7 +114,7 @@ bun run smoke:native
 docker compose -f infra/local/compose.yml up -d
 cp .env.example .env
 bun run db:migrate && bun run db:migrate      # 第二次应输出 applied: []
-bun run test                                  # 13 个单元测试 + 8 个 DB 测试
+bun run test                                  # 10 个测试文件，29 个测试；另有 `bun run gate:pi`
 ```
 
-数据库可用并通过上述检查后，执行 W1 的双迁移和完整测试；再按 §3 处理 W5/W6。W2 到 W4 的代码入口和验证记录在 §2.5 到 §2.7。
+数据库可用并通过上述检查后，执行 W1 的双迁移和完整测试；再按 §3 处理 W5/W6。阶段一可靠性代码收口和 Pi 完整门禁已验证，但浏览器断线验收、Claude ACP 门禁/替代路径决策、远程 CI 和真实服务重启全链路记录仍是阶段一退出条件。

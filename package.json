@@ -18,6 +18,7 @@
     "db:migrate": "node --env-file-if-exists=.env --import tsx apps/web/server/db/migrate.ts",
     "server:dev": "node --env-file-if-exists=.env --import tsx apps/web/server/src/main.ts",
     "spike:acp": "node --env-file-if-exists=.env --import tsx packages/agent-adapters/src/spike.ts",
+    "gate:pi": "node --env-file-if-exists=.env --import tsx packages/agent-adapters/src/pi-gate.ts",
     "smoke:native": "node scripts/smoke-native.mjs",
     "check:contracts": "node scripts/check-contract-docs.mjs",
     "format": "prettier --write .",

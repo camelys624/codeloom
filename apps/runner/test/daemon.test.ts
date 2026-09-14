@@ -85,6 +85,7 @@ describe('RunnerDaemon control messages', () => {
       stop: false,
       terminalSent: false,
       restarted: false,
+      stale: false,
       approvalResolvers: new Map(),
       session: {
         close: async () => {

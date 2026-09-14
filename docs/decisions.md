@@ -343,6 +343,25 @@ Runner 无法阻止 Agent 用用户凭据 push。如实标注 `gitPush` enforcem
 - 结论：等待已配置 Claude 上游恢复可用后重跑 `SPIKE_MODEL=opus bun run spike:acp`。不因上游 429/503 改用 SDK，不越过 roadmap 门禁实施服务端、Runner 守护进程和 Web UI。
 - 当前进程树监督实现依赖 Linux `/proc`。macOS 与 Windows 会显式拒绝启动，不能宣称已满足跨平台 Runner 部署要求。
 
+### 2026-09-13 实施记录：Pi 基础真实调用已验证
+
+- 用户已在本机实际调用 Pi agent，并确认能够正常获得 agent 返回信息。
+- 该结果证明 Pi RPC 启动与基础 prompt/response 链路可用；尚不足以替代阶段 1 的完整门禁记录。连续 10 Turn、真实权限审批往返、取消和进程清理仍需单独验收。
+
+### 2026-09-14 Pi 完整门禁记录
+
+- 执行命令：`bun run gate:pi`。
+- 结果：连续 10 Turn 上下文连续性通过；权限请求在批准前没有文件副作用，批准后目标文件写入成功；取消返回 `canceled`；Agent 与 detached tool descendant 在 20 秒内清理。
+- 结论：Pi 作为阶段 1 真实 engine 的完整 adapter 门禁通过。Claude ACP 仍保留独立阻塞项，不将 Pi 结果冒充 Claude 门禁结果。
+
+### 2026-09-14 运行环境演练记录
+
+- 本地 PostgreSQL 16 healthy；两次 `bun run db:migrate` 均返回 `applied: []`。
+- 已有 Web 服务端和 Runner daemon 运行；Runner 重启后数据库状态恢复为 online，活跃 Pi Attempt 保持可用，queued Attempt 可继续领取。
+- 浏览器 headless 验收受系统缺少 `libnspr4.so` 阻塞，未宣称视觉断线验收通过。
+
+---
+
 ---
 
 ## ADR-019：先本地，再抽取云端抽象

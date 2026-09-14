@@ -23,6 +23,7 @@ import {
   type AgentSessionHandle,
 } from '@agent-workspace/contracts';
 import {
+  AdapterError,
   ClaudeCodeAdapter,
   PiAdapter,
   engineEnvironment,
@@ -62,8 +63,10 @@ interface ActiveAttempt {
   worktreePath?: string;
   stop: boolean;
   terminalSent: boolean;
+  terminalAction?: 'cancel' | 'close';
   restarted: boolean;
   approvalResolvers: Map<string, (decision: PermissionDecision) => void>;
+  stale: boolean;
 }
 
 function placeholderCapabilities(profile: AgentProfile): AgentCapabilities {
@@ -150,6 +153,7 @@ export class RunnerDaemon {
   }
 
   async stop(): Promise<void> {
+    this.closed = true;
     clearTimeout(this.reconnectTimer);
     clearInterval(this.heartbeatTimer);
     clearInterval(this.claimTimer);
@@ -173,6 +177,7 @@ export class RunnerDaemon {
         stop: true,
         terminalSent: false,
         restarted: true,
+        stale: false,
         approvalResolvers: new Map(),
       });
     }
@@ -378,9 +383,16 @@ export class RunnerDaemon {
     }
     switch (message.type) {
       case 'server.hello':
-        for (const item of message.attempts)
-          if (item.disposition === 'stale')
+        for (const item of message.attempts) {
+          if (item.disposition === 'stale') {
             await this.markStale(item.attemptId);
+            continue;
+          }
+          for (const control of item.controls) {
+            if (control.type === 'attempt.cancel')
+              await this.handleAttemptCancel(control.attemptId);
+          }
+        }
         await this.replayOutbox();
         for (const item of message.attempts) {
           const attempt = this.active.get(item.attemptId);
@@ -456,6 +468,7 @@ export class RunnerDaemon {
     attempt: ActiveAttempt,
     event: unknown,
   ): Promise<void> {
+    if (attempt.stale) return;
     const message = AttemptEventMessageSchema.parse({
       type: 'attempt.event',
       attemptId: attempt.attemptId,
@@ -473,6 +486,7 @@ export class RunnerDaemon {
     turnId: string,
     frames: TranscriptFrame[],
   ): Promise<void> {
+    if (attempt.stale) return;
     const message = AttemptTranscriptMessageSchema.parse({
       type: 'attempt.transcript',
       attemptId: attempt.attemptId,
@@ -500,6 +514,7 @@ export class RunnerDaemon {
       stop: false,
       terminalSent: false,
       restarted: false,
+      stale: false,
       approvalResolvers: new Map(),
     };
     this.active.set(attempt.attemptId, attempt);
@@ -537,11 +552,19 @@ export class RunnerDaemon {
         branchName: attemptRow.branchName,
         baseCommitSha: attemptRow.baseCommitSha,
       });
+      attempt.worktreePath = worktree.path;
+      await this.persistAttempt(attempt);
+      if (attempt.terminalAction) {
+        await this.finalizeTerminal(attempt, attempt.terminalAction);
+        return;
+      }
+      if (attempt.stop) return;
       const profile = this.profiles.get(spec.agentProfileId);
       if (!profile)
         throw new Error(
           `Agent profile ${spec.agentProfileId} is not available on this Runner`,
         );
+      if (attempt.stop) return;
       const adapter =
         this.options.adapterFactory?.(spec.engine, profile) ??
         (spec.engine === 'claude-code'
@@ -579,6 +602,11 @@ export class RunnerDaemon {
         },
       });
       attempt.session = session;
+      if (attempt.terminalAction) {
+        await this.finalizeTerminal(attempt, attempt.terminalAction);
+        return;
+      }
+      if (attempt.stop) return;
       await this.promptAttempt(
         attempt,
         spec.initialPrompt,
@@ -587,19 +615,44 @@ export class RunnerDaemon {
       while (!attempt.stop)
         await new Promise<void>((resolve) => setTimeout(resolve, 250));
     } catch (error) {
-      if (!attempt.terminalSent && !attempt.stop) {
+      if (!attempt.terminalSent && attempt.terminalAction && !attempt.stale) {
+        if (attempt.terminalAction === 'cancel') {
+          await this.sendEvent(attempt, {
+            type: 'attempt.canceled',
+            occurredAt: new Date().toISOString(),
+            payload: {},
+          });
+        } else {
+          await this.sendEvent(attempt, {
+            type: 'attempt.failed',
+            occurredAt: new Date().toISOString(),
+            payload: {
+              error: {
+                code: 'worktree_failed',
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : 'Unable to prepare worktree',
+                retryable: false,
+              },
+            },
+          });
+        }
+        attempt.terminalSent = true;
+      } else if (!attempt.terminalSent && !attempt.stop) {
         const detail =
-          error instanceof Error ? error.message : 'Agent start failed';
+          error instanceof AdapterError
+            ? error.runError
+            : {
+                code: 'agent_start_failed' as const,
+                message:
+                  error instanceof Error ? error.message : 'Agent start failed',
+                retryable: true,
+              };
         await this.sendEvent(attempt, {
           type: 'attempt.failed',
           occurredAt: new Date().toISOString(),
-          payload: {
-            error: {
-              code: 'agent_start_failed',
-              message: detail,
-              retryable: true,
-            },
-          },
+          payload: { error: detail },
         });
         attempt.terminalSent = true;
       }
@@ -726,45 +779,103 @@ export class RunnerDaemon {
     const attempt = this.active.get(attemptId);
     if (attempt?.turnId === turnId) await attempt.session?.cancelTurn();
   }
-
-  private async handleAttemptCancel(attemptId: string): Promise<void> {
-    const attempt = this.active.get(attemptId);
-    if (!attempt || attempt.terminalSent) return;
+  private async finalizeTerminal(
+    attempt: ActiveAttempt,
+    action: 'cancel' | 'close',
+  ): Promise<void> {
+    if (attempt.terminalSent || attempt.stale) return;
     attempt.stop = true;
-    await attempt.session?.cancelTurn();
-    const headCommitSha = await commitAll(
-      attempt.worktreePath ?? '',
-      'cancel agent attempt',
-    );
-    await this.sendEvent(attempt, {
-      type: 'attempt.canceled',
-      occurredAt: new Date().toISOString(),
-      payload: { headCommitSha },
-    });
     attempt.terminalSent = true;
-  }
-
-  private async handleAttemptClose(attemptId: string): Promise<void> {
-    const attempt = this.active.get(attemptId);
-    if (!attempt || attempt.terminalSent) return;
-    attempt.stop = true;
-    await attempt.session?.close();
-    const headCommitSha = await commitAll(
-      attempt.worktreePath ?? '',
-      'complete agent attempt',
-    );
+    let failure: unknown;
+    try {
+      if (attempt.turnId) await attempt.session?.cancelTurn();
+      await attempt.session?.close();
+    } catch (error) {
+      failure = error;
+    }
+    let headCommitSha: string | undefined;
+    if (attempt.worktreePath) {
+      try {
+        headCommitSha = await commitAll(
+          attempt.worktreePath,
+          action === 'cancel'
+            ? 'cancel agent attempt'
+            : 'complete agent attempt',
+        );
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure) {
+      await this.sendEvent(attempt, {
+        type: 'attempt.failed',
+        occurredAt: new Date().toISOString(),
+        payload: {
+          error: {
+            code: 'worktree_failed',
+            message:
+              failure instanceof Error
+                ? failure.message
+                : 'Unable to finalize attempt',
+            retryable: false,
+          },
+        },
+      });
+      return;
+    }
+    if (action === 'cancel') {
+      await this.sendEvent(attempt, {
+        type: 'attempt.canceled',
+        occurredAt: new Date().toISOString(),
+        payload: headCommitSha ? { headCommitSha } : {},
+      });
+      return;
+    }
+    if (!headCommitSha) {
+      await this.sendEvent(attempt, {
+        type: 'attempt.failed',
+        occurredAt: new Date().toISOString(),
+        payload: {
+          error: {
+            code: 'worktree_failed',
+            message: 'Attempt has no worktree to complete',
+            retryable: false,
+          },
+        },
+      });
+      return;
+    }
     await this.sendEvent(attempt, {
       type: 'attempt.completed',
       occurredAt: new Date().toISOString(),
       payload: { headCommitSha, reason: 'user' },
     });
-    attempt.terminalSent = true;
+  }
+  private async handleAttemptCancel(attemptId: string): Promise<void> {
+    const attempt = this.active.get(attemptId);
+    if (!attempt || attempt.terminalSent || attempt.terminalAction) return;
+    attempt.stop = true;
+    attempt.terminalAction = 'cancel';
+    if (attempt.worktreePath)
+      await this.finalizeTerminal(attempt, attempt.terminalAction);
+  }
+
+  private async handleAttemptClose(attemptId: string): Promise<void> {
+    const attempt = this.active.get(attemptId);
+    if (!attempt || attempt.terminalSent || attempt.terminalAction) return;
+    attempt.stop = true;
+    attempt.terminalAction = 'close';
+    if (attempt.worktreePath)
+      await this.finalizeTerminal(attempt, attempt.terminalAction);
   }
 
   private async markStale(attemptId: string): Promise<void> {
     const attempt = this.active.get(attemptId);
     if (attempt) {
+      attempt.stale = true;
       attempt.stop = true;
+      for (const resolve of attempt.approvalResolvers.values())
+        resolve({ decision: 'deny' });
       await attempt.session?.close();
       this.active.delete(attemptId);
     }

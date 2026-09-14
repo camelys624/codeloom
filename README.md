@@ -41,7 +41,7 @@ Codeloom 是面向小团队的 coding agent 任务台：在一个 Web 应用中�
 - `apps/web`、`apps/runner` 与 `packages/git-worktree`：Fastify API、Runner 守护进程、React SPA、隔离 worktree 和每 Turn patch 链路已落地；创建 Run 时浏览器提交 `baseRef`，服务端通过 Runner 在本地 checkout 解析并冻结 `baseCommitSha`；
 - `packages/agent-adapters`：真实 Claude ACP 客户端、门禁程序、按 engine 的环境变量白名单、隔离于生产入口的 fake adapter，以及协议/脱敏回归测试。
 
-**尚不是可使用的完整任务台。** ACP 已握手并建立会话，但当前配置上游在真实第 1 轮返回 `429 Service Unavailable`，直接 API 探测返回 503。门禁未通过；当前服务端、Runner 守护进程和 Web UI 已有最小竖切，但 PostgreSQL 集成测试、真实引擎验收和生产验收仍未完成。当前进程树监督仅支持 Linux。实测经过与限制见 [ADR-018](./docs/decisions.md#adr-018acp-优先agent-sdk-回退)，多引擎接入顺序见 [ADR-027](./docs/decisions.md#adr-027多引擎的接口面先于第二个-adapter)。
+**尚不是可使用的完整任务台。** ACP 已握手并建立会话，但当前配置上游在真实第 1 轮返回 `429 Service Unavailable`，直接 API 探测返回 503。用户已实测 Pi agent 可以正常调用并取得 agent 返回信息；Runner 终态提交、启动阶段取消竞态、stale 审批释放、客户端 Run 流尾部加载与 gap 补拉已补强。Pi 的连续 10 Turn、真实权限往返、取消和进程清理以及 Claude 门禁仍未完整验收。当前服务端、Runner 守护进程和 Web UI 已有最小竖切，但生产验收仍未完成。当前进程树监督仅支持 Linux。实测经过与限制见 [ADR-018](./docs/decisions.md#adr-018acp-优先agent-sdk-回退)，多引擎接入顺序见 [ADR-027](./docs/decisions.md#adr-027多引擎的接口面先于第二个-adapter)。
 
 ### 运行已有实现
 

@@ -1,3 +1,4 @@
+import { ServerHelloSchema } from '../src/index.js';
 import { describe, expect, it } from 'vitest';
 import {
   AttemptCancelRequestedEventSchema,
@@ -165,5 +166,25 @@ describe('untrusted transport boundaries', () => {
         payload: { scope: 'turn' },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('runner reconnect controls', () => {
+  it('accepts a server-issued cancel control in the hello reconciliation', () => {
+    expect(
+      ServerHelloSchema.parse({
+        type: 'server.hello',
+        protocolVersion: 1,
+        runnerId: 'rnr_test',
+        serverTime: '2026-09-13T00:00:00.000Z',
+        attempts: [
+          {
+            attemptId: 'att_test',
+            disposition: 'continue',
+            controls: [{ type: 'attempt.cancel', attemptId: 'att_test' }],
+          },
+        ],
+      }).attempts[0]?.controls[0]?.type,
+    ).toBe('attempt.cancel');
   });
 });

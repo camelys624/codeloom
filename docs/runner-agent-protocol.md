@@ -105,7 +105,8 @@ WebSocket 建立后 Runner 先发：
 
 ```json
 { "type": "server.hello", "protocolVersion": 1, "runnerId": "rnr_…", "serverTime": "…",
-  "attempts": [ { "attemptId": "att_…", "disposition": "continue" | "stale" } ] }
+  "attempts": [ { "attemptId": "att_…", "disposition": "continue" | "stale",
+                  "controls": [ { "type": "attempt.cancel", "attemptId": "att_…" } ] } ] }
 ```
 
 `attempts` 是对 `activeAttemptIds` 逐个的裁决。`stale` 的处理见 §10。
@@ -267,9 +268,10 @@ repository.ref_failed   { requestId, repositoryId, ref, error }
 Runner 重连后：
 
 1. 发 `runner.hello`，带 `activeAttemptIds`；
-2. 对 `disposition: continue` 的 Attempt 恢复心跳并重发 outbox；
-3. 对 `disposition: stale` 的 Attempt 执行 §10；
-4. 若 Runner 是进程重启（Agent 子进程已不存在），对每个本地活跃 Attempt：先在 worktree 上提交现有改动，再发 `attempt.failed { code: 'agent_crashed', message: 'runner restarted' }`。不假装 session 还在。
+2. 服务端对仍存在的 `cancel_requested_at` 生成 `controls`，Runner 在确认 `server.hello` 后执行这些控制消息；
+3. 对 `disposition: continue` 的 Attempt 恢复心跳并重发 outbox；
+4. 对 `disposition: stale` 的 Attempt 执行 §10；
+5. 若 Runner 是进程重启（Agent 子进程已不存在），对每个本地活跃 Attempt：先在 worktree 上提交现有改动，再发 `attempt.failed { code: 'agent_crashed', message: 'runner restarted' }`。不假装 session 还在。
 
 服务端侧不需要额外动作：reaper 会把心跳中断超过 45 秒的 Attempt 标为 `lost`。
 

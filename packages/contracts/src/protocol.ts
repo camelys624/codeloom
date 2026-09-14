@@ -46,7 +46,6 @@ export const RunnerHelloSchema = z.strictObject({
     .max(10000),
   activeAttemptIds: z.array(IdSchema).max(1024),
 });
-export type RunnerHello = z.infer<typeof RunnerHelloSchema>;
 export const ServerHelloSchema = z.strictObject({
   type: z.literal('server.hello'),
   protocolVersion: SequenceSchema,
@@ -57,6 +56,15 @@ export const ServerHelloSchema = z.strictObject({
       z.strictObject({
         attemptId: IdSchema,
         disposition: z.enum(['continue', 'stale']),
+        controls: z
+          .array(
+            z.strictObject({
+              type: z.literal('attempt.cancel'),
+              attemptId: IdSchema,
+            }),
+          )
+          .max(16)
+          .default([]),
       }),
     )
     .max(1024),

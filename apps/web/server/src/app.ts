@@ -609,7 +609,8 @@ export async function buildApp(
       }
 
       const event = RunnerEventSchema.parse(message.event);
-      let nextStatus = attempt.status as AttemptStatus;
+      const previousStatus = attempt.status as AttemptStatus;
+      let nextStatus = previousStatus;
       switch (event.type) {
         case 'attempt.preparing':
           nextStatus = 'preparing';
@@ -703,17 +704,19 @@ export async function buildApp(
             [attempt.id],
           );
           break;
-        case 'attempt.failed':
+        case 'attempt.failed': {
+          const error = event.payload.error;
           nextStatus = 'failed';
           await client.query(
             `UPDATE attempts SET error = $2, finished_at = now() WHERE id = $1`,
-            [attempt.id, event.payload.error],
+            [attempt.id, error],
           );
           await client.query(
             `UPDATE approval_requests SET status = 'expired', updated_at = now() WHERE attempt_id = $1 AND status = 'pending'`,
             [attempt.id],
           );
           break;
+        }
         case 'attempt.canceled':
           nextStatus = 'canceled';
           await client.query(
@@ -739,6 +742,12 @@ export async function buildApp(
         event,
         message.clientSeq,
       );
+      if (event.type === 'attempt.failed')
+        await queueAutomaticRetry(
+          client,
+          { ...attempt, status: previousStatus },
+          event.payload.error,
+        );
       return { kind: 'ack' as const, clientSeq: message.clientSeq, eventRow };
     });
     if (result.kind === 'ack' && result.eventRow) {
@@ -846,6 +855,47 @@ export async function buildApp(
       });
     }
     return result;
+  }
+
+  async function queueAutomaticRetry(
+    client: PoolClient,
+    attempt: Row,
+    error: RunError,
+  ): Promise<boolean> {
+    if (
+      !error.retryable ||
+      !['queued', 'claimed', 'preparing'].includes(String(attempt.status))
+    )
+      return false;
+    const run = one(
+      await client.query<Row>('SELECT * FROM runs WHERE id = $1 FOR UPDATE', [
+        attempt.run_id,
+      ]),
+      'Run not found for automatic retry',
+    );
+    const retryCount = Number(run.auto_retry_count ?? 0);
+    if (retryCount >= 3) return false;
+    const nextRetryCount = retryCount + 1;
+    const delaySeconds = Math.min(5 * 2 ** (nextRetryCount - 1), 60);
+    await client.query(
+      `UPDATE attempts SET status = 'failed', finished_at = now() WHERE id = $1`,
+      [attempt.id],
+    );
+    await client.query('UPDATE runs SET auto_retry_count = $2 WHERE id = $1', [
+      run.id,
+      nextRetryCount,
+    ]);
+    await createQueuedAttempt(client, {
+      workspaceId: String(run.workspace_id),
+      runId: String(run.id),
+      runnerId: String(run.runner_id),
+      agentProfileId: String(run.agent_profile_id),
+      number: Number(attempt.number) + 1,
+      baseCommitSha: String(run.base_commit_sha),
+      resumeFrom: { kind: 'base' },
+      notBefore: new Date(Date.now() + delaySeconds * 1000),
+    });
+    return true;
   }
 
   async function createQueuedAttempt(
@@ -2140,15 +2190,22 @@ export async function buildApp(
               ],
             );
           const active = await pool.query<Row>(
-            `SELECT id, status FROM attempts WHERE runner_id = $1 AND status IN ('claimed','preparing','running','idle','waiting_approval')`,
+            `SELECT id, status, cancel_requested_at FROM attempts WHERE runner_id = $1 AND status IN ('claimed','preparing','running','idle','waiting_approval')`,
             [runner.id],
           );
-          const dispositions = hello.activeAttemptIds.map((attemptId) => ({
-            attemptId,
-            disposition: active.rows.some((row) => String(row.id) === attemptId)
-              ? ('continue' as const)
-              : ('stale' as const),
-          }));
+          const dispositions = hello.activeAttemptIds.map((attemptId) => {
+            const row = active.rows.find(
+              (item) => String(item.id) === attemptId,
+            );
+            return {
+              attemptId,
+              disposition: row ? ('continue' as const) : ('stale' as const),
+              controls:
+                row && row.cancel_requested_at
+                  ? [{ type: 'attempt.cancel' as const, attemptId }]
+                  : [],
+            };
+          });
           const serverHello = ServerHelloSchema.parse({
             type: 'server.hello',
             protocolVersion: PROTOCOL_VERSION,
@@ -2373,7 +2430,11 @@ export async function buildApp(
       const changed: Row[] = [];
       for (const row of expired.rows) {
         const attempt = await reloadAttempt(client, String(row.id));
-        const error = runError('lost', 'Runner heartbeat timeout', false);
+        const error = runError(
+          'lost',
+          'Runner heartbeat timeout',
+          ['claimed', 'preparing'].includes(String(row.status)),
+        );
         await client.query(
           `UPDATE attempts SET status = 'lost', finished_at = now(), error = $2 WHERE id = $1`,
           [row.id, error],
@@ -2384,6 +2445,12 @@ export async function buildApp(
         );
         await appendServerEvent(client, attempt, 'attempt.lost', {});
         await projectRun(client, String(row.run_id), 'lost');
+        if (error.retryable)
+          await queueAutomaticRetry(
+            client,
+            { ...attempt, status: String(row.status) },
+            error,
+          );
         changed.push({ ...row, status: 'lost', error });
       }
       return changed;
