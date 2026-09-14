@@ -8,10 +8,10 @@ jobs:
     steps:
       - name: Start PostgreSQL
         run: |
-          apt-get update
-          apt-get install -y postgresql postgresql-client
-          service postgresql start
-          su - postgres -c "psql -c \"ALTER USER postgres PASSWORD 'postgres';\""
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-client
+          sudo service postgresql start
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
           pg_isready -h 127.0.0.1 -U postgres -d postgres
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
