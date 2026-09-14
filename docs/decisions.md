@@ -359,6 +359,7 @@ Runner 无法阻止 Agent 用用户凭据 push。如实标注 `gitPush` enforcem
 - 本地 PostgreSQL 16 healthy；两次 `bun run db:migrate` 均返回 `applied: []`。
 - 已有 Web 服务端和 Runner daemon 运行；Runner 重启后数据库状态恢复为 online，活跃 Pi Attempt 保持可用，queued Attempt 可继续领取。
 - 浏览器 headless 验收受系统缺少 `libnspr4.so` 阻塞，未宣称视觉断线验收通过。
+- 远程 CI run #3 在 GitHub Actions service container 初始化阶段因 Docker exit 125 失败，checkout、build、migration 和 test 步骤全部被跳过；这属于 CI runner 环境阻塞，不是代码测试失败。
 
 ---
 
