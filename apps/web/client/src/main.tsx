@@ -1,5 +1,10 @@
 import { StrictMode, forwardRef, useEffect, useRef, useState } from 'react';
-import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from 'react';
+import type {
+  ComponentPropsWithoutRef,
+  DragEvent,
+  ReactElement,
+  ReactNode,
+} from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as ToggleGroup from '@radix-ui/react-toggle-group';
@@ -585,6 +590,19 @@ function TasksPage() {
       void client.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
+  const move = useMutation({
+    mutationFn: ({ task, status }: { task: Task; status: TaskStatus }) =>
+      api.updateTask(task.id, { revision: task.revision, status }),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+  const updatingTaskId = move.isPending ? move.variables?.task.id : undefined;
+  const handleMove = (task: Task, status: TaskStatus) => {
+    if (move.isPending || task.status === status || !canMoveTask(task, status))
+      return;
+    move.mutate({ task, status });
+  };
   if (tasks.isPending || repositories.isPending) return <p>加载任务…</p>;
   if (tasks.error || repositories.error)
     return <ErrorNotice error={tasks.error ?? repositories.error} />;
@@ -669,19 +687,20 @@ function TasksPage() {
           </ToggleGroup.Item>
         </ToggleGroup.Root>
       </section>
+      {move.error && <ErrorNotice error={move.error} />}
       {view === 'board' ? (
         <TaskBoard
           tasks={visibleTasks}
+          updatingTaskId={updatingTaskId}
           onAddTask={() => setCreateOpen(true)}
-          onMove={(task, status) => {
-            if (!canMoveTask(task, status) || task.status === status) return;
-            void api
-              .updateTask(task.id, { revision: task.revision, status })
-              .then(() => client.invalidateQueries({ queryKey: ['tasks'] }));
-          }}
+          onMove={handleMove}
         />
       ) : (
-        <TaskList tasks={visibleTasks} />
+        <TaskList
+          tasks={visibleTasks}
+          updatingTaskId={updatingTaskId}
+          onMove={handleMove}
+        />
       )}
       {createOpen && (
         <CreateTaskDialog
@@ -709,17 +728,64 @@ function TaskBoard({
   tasks,
   onMove,
   onAddTask,
+  updatingTaskId,
 }: {
   tasks: Task[];
   onMove: (task: Task, status: TaskStatus) => void;
   onAddTask?: () => void;
+  updatingTaskId?: string;
 }) {
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dropStatus, setDropStatus] = useState<TaskStatus | null>(null);
+  const draggedTask = draggedTaskId
+    ? tasks.find((task) => task.id === draggedTaskId)
+    : undefined;
+  const clearDrag = () => {
+    setDraggedTaskId(null);
+    setDropStatus(null);
+  };
+  const handleDrop = (status: TaskStatus, event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    const taskId = event.dataTransfer.getData('text/plain') || draggedTaskId;
+    const task = taskId ? tasks.find((item) => item.id === taskId) : undefined;
+    clearDrag();
+    if (task && task.status !== status && canMoveTask(task, status))
+      onMove(task, status);
+  };
   return (
     <div className="task-board">
       {TASK_COLUMNS.map((status) => {
         const columnTasks = tasks.filter((task) => task.status === status);
+        const canDrop =
+          draggedTask !== undefined &&
+          draggedTask.status !== status &&
+          canMoveTask(draggedTask, status);
+        const dropClass =
+          dropStatus === status
+            ? canDrop
+              ? ' is-drop-target'
+              : ' is-drop-invalid'
+            : '';
         return (
-          <section className="task-column" key={status}>
+          <section
+            aria-label={`${TASK_STATUS_LABELS[status]} tasks`}
+            className={`task-column${dropClass}`}
+            key={status}
+            onDragLeave={(event) => {
+              const relatedTarget = event.relatedTarget as Node | null;
+              if (
+                !relatedTarget ||
+                !event.currentTarget.contains(relatedTarget)
+              )
+                setDropStatus(null);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = canDrop ? 'move' : 'none';
+              setDropStatus(status);
+            }}
+            onDrop={(event) => handleDrop(status, event)}
+          >
             <header>
               <span className={`column-dot column-${status}`} />
               <h2>{TASK_STATUS_LABELS[status]}</h2>
@@ -735,7 +801,19 @@ function TaskBoard({
             </header>
             <div className="task-column-body">
               {columnTasks.map((task) => (
-                <TaskCard key={task.id} task={task} onMove={onMove} />
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  isDragging={task.id === draggedTaskId}
+                  isUpdating={task.id === updatingTaskId}
+                  onDragEnd={clearDrag}
+                  onDragStart={(event) => {
+                    setDraggedTaskId(task.id);
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', task.id);
+                  }}
+                  onMove={onMove}
+                />
               ))}
               {columnTasks.length === 0 && (
                 <div className="empty-column">No tasks</div>
@@ -755,11 +833,24 @@ function TaskBoard({
   );
 }
 
-function TaskList({ tasks }: { tasks: Task[] }) {
+function TaskList({
+  tasks,
+  onMove,
+  updatingTaskId,
+}: {
+  tasks: Task[];
+  onMove: (task: Task, status: TaskStatus) => void;
+  updatingTaskId?: string;
+}) {
   return (
     <section className="task-list-view">
       {tasks.map((task) => (
-        <TaskCard key={task.id} task={task} />
+        <TaskCard
+          key={task.id}
+          task={task}
+          isUpdating={task.id === updatingTaskId}
+          onMove={onMove}
+        />
       ))}
       {tasks.length === 0 && (
         <div className="empty-state">No tasks match these filters.</div>
@@ -771,12 +862,26 @@ function TaskList({ tasks }: { tasks: Task[] }) {
 function TaskCard({
   task,
   onMove,
+  onDragStart,
+  onDragEnd,
+  isDragging = false,
+  isUpdating = false,
 }: {
   task: Task;
   onMove?: (task: Task, status: TaskStatus) => void;
+  onDragStart?: (event: DragEvent<HTMLAnchorElement>) => void;
+  onDragEnd?: () => void;
+  isDragging?: boolean;
+  isUpdating?: boolean;
 }) {
   return (
-    <Link className="task-card" to={`/tasks/${task.id}`}>
+    <Link
+      className={`task-card${isDragging ? ' is-dragging' : ''}`}
+      draggable={Boolean(onDragStart)}
+      onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      to={`/tasks/${task.id}`}
+    >
       <div className="task-card-top">
         <span
           className={`priority-indicator priority-${task.priority ?? 'none'}`}
@@ -801,6 +906,7 @@ function TaskCard({
         {onMove && (
           <AppSelect
             value={task.status}
+            disabled={isUpdating}
             onValueChange={(value) => onMove(task, value as TaskStatus)}
             options={TASK_COLUMNS.map((status) => ({
               value: status,

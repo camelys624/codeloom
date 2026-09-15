@@ -1,11 +1,11 @@
 # 实现状态与交接
 
-- 日期：2026-09-14
-- 对应文档：0.6 加 ADR-027；阶段 2 首个 UI slice
+- 日期：2026-09-15
+- 对应文档：0.6 加 ADR-027；阶段 2 首个 UI slice 及看板交互增强
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 首个 UI slice 已落地到独立分支：Circle 借鉴的应用壳、可折叠 Sidebar、主题切换、Command Palette、Task 看板、筛选 chips、优先级和用户可用的状态迁移入口。服务端仍是 PostgreSQL 唯一事实，所有 Task 状态更新继续通过已有 revision 乐观并发接口。
+阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 首个 UI slice 已落地到独立分支：Circle 借鉴的应用壳、可折叠 Sidebar、主题切换、Command Palette、Task 看板、筛选 chips、优先级、拖拽状态迁移和用户可用的状态迁移入口。服务端仍是 PostgreSQL 唯一事实，所有 Task 状态更新继续通过已有 revision 乐观并发接口。
 
 ## 2. 已完成
 
@@ -76,9 +76,9 @@
 
 - `apps/web/client/src/main.tsx`：Circle-inspired 应用壳、可折叠 Sidebar、顶部搜索入口、Command Palette（`⌘K` / `Ctrl-K`）、主题切换和 Task board/list 视图。
 - `apps/web/client/src/lib/tasks.ts`：Task 状态列、优先级标签、过滤、排序和用户状态迁移规则；状态迁移复用 `packages/contracts` 的服务端状态机。
-- Task 看板：按 backlog、todo、in_progress、needs_review、done、canceled 分列；支持标题/描述搜索、优先级 chips、优先级创建和状态更新；创建任务使用现有 REST schema，状态更新携带 revision。
+- Task 看板：按 backlog、todo、in_progress、needs_review、done、canceled 分列；支持标题/描述搜索、优先级 chips、优先级创建、原生拖拽状态迁移和下拉状态更新；合法迁移由客户端提前阻止，实际更新使用现有 revision 乐观并发接口。
 - `apps/web/client/test/task-board.test.ts`：过滤、优先级排序不修改 Query 结果、合法/非法状态迁移的行为回归。
-- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bunx vitest run apps/web/client/test/task-board.test.ts`（3 tests）和 `bun run format` 后的 `git diff --check` 已通过。生产构建的 Zod 注释告警来自依赖包，不影响产物。
+- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bun run test`（11 个测试文件，32 个测试）、`bunx vitest run apps/web/client/test/task-board.test.ts`（3 tests）、`bun run format:check` 和 `git diff --check` 已通过。生产构建的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置，不影响构建成功。
 
 ## 3. 未完成
 

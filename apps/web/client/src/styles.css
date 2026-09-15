@@ -430,6 +430,18 @@ kbd {
 .task-column {
   min-width: 190px;
 }
+.task-column.is-drop-target .task-column-body {
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.task-column.is-drop-invalid .task-column-body {
+  padding: 7px;
+  border: 1px dashed color-mix(in srgb, #dc2626 45%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, #dc2626 4%, transparent);
+}
 .task-column > header {
   display: flex;
   align-items: center;
@@ -496,6 +508,15 @@ kbd {
   border-color: var(--accent);
   box-shadow: var(--shadow);
   transform: translateY(-1px);
+}
+.task-card[draggable='true'] {
+  cursor: grab;
+}
+.task-card[draggable='true']:active {
+  cursor: grabbing;
+}
+.task-card.is-dragging {
+  opacity: 0.45;
 }
 .task-card-top,
 .task-card-footer {
