@@ -1,8 +1,31 @@
 import { StrictMode, useEffect, useRef, useState } from 'react';
-import type { MouseEvent, PointerEvent } from 'react';
+import type { ReactElement, ReactNode } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import * as ToggleGroup from '@radix-ui/react-toggle-group';
+import * as Tooltip from '@radix-ui/react-tooltip';
+import { Command } from 'cmdk';
 import { createRoot } from 'react-dom/client';
-import * as Select from '@radix-ui/react-select';
-import { Check, ChevronDown } from 'lucide-react';
+import {
+  ArrowLeft,
+  Bell,
+  Check,
+  ChevronDown,
+  Command as CommandIcon,
+  ExternalLink,
+  GitBranch,
+  LayoutGrid,
+  List,
+  LogOut,
+  MoreHorizontal,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  Sun,
+  X,
+} from 'lucide-react';
 import {
   Link,
   NavLink,
@@ -30,6 +53,7 @@ import {
   type TaskStatus,
   type TranscriptChunk,
 } from '@agent-workspace/contracts';
+import { AppSelect } from './components/ui/select.js';
 import { api, ApiError, type RunSnapshot } from './lib/api.js';
 import { AttemptStream } from './lib/stream.js';
 import {
@@ -50,91 +74,135 @@ const queryClient = new QueryClient({
   },
 });
 
-const EMPTY_SELECT_VALUE = '__codeloom_empty__';
-
-function AppSelect({
-  value,
-  onValueChange,
-  options,
-  placeholder,
-  ariaLabel,
+function IconButton({
+  label,
+  children,
+  className = '',
+  onClick,
   disabled = false,
-  required = false,
-  stopPropagation = false,
-  className,
 }: {
-  value: string;
-  onValueChange: (value: string) => void;
-  options: readonly { value: string; label: string }[];
-  placeholder?: string;
-  ariaLabel?: string;
-  disabled?: boolean;
-  required?: boolean;
-  stopPropagation?: boolean;
+  label: string;
+  children: ReactElement;
   className?: string;
+  onClick?: () => void;
+  disabled?: boolean;
 }) {
-  const normalizedOptions = options.map((option) => ({
-    ...option,
-    value: option.value || EMPTY_SELECT_VALUE,
-  }));
-  const stopTriggerPropagation = (event: MouseEvent<HTMLButtonElement>) => {
-    if (stopPropagation) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
-  const stopTriggerPointerPropagation = (
-    event: PointerEvent<HTMLButtonElement>,
-  ) => {
-    if (stopPropagation) event.stopPropagation();
-  };
   return (
-    <Select.Root
-      value={value || undefined}
-      onValueChange={(nextValue) =>
-        onValueChange(nextValue === EMPTY_SELECT_VALUE ? '' : nextValue)
-      }
+    <button
+      className={`icon-button${className ? ` ${className}` : ''}`}
+      aria-label={label}
+      onClick={onClick}
       disabled={disabled}
-      required={required}
+      type="button"
     >
-      <Select.Trigger
-        className={`select-trigger${className ? ` ${className}` : ''}`}
-        aria-label={ariaLabel}
-        onClick={stopPropagation ? stopTriggerPropagation : undefined}
-        onPointerDown={
-          stopPropagation ? stopTriggerPointerPropagation : undefined
-        }
-      >
-        <Select.Value className="select-value" placeholder={placeholder} />
-        <Select.Icon className="select-icon">
-          <ChevronDown size={16} strokeWidth={1.8} />
-        </Select.Icon>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Content
-          className="select-content"
-          position="popper"
-          sideOffset={4}
-        >
-          <Select.Viewport className="select-viewport">
-            {normalizedOptions.map((option) => (
-              <Select.Item
-                className="select-item"
-                key={option.value}
-                value={option.value}
-              >
-                <Select.ItemText>{option.label}</Select.ItemText>
-                <Select.ItemIndicator className="select-item-indicator">
-                  <Check size={15} strokeWidth={2} />
-                </Select.ItemIndicator>
-              </Select.Item>
-            ))}
-          </Select.Viewport>
-        </Select.Content>
-      </Select.Portal>
-    </Select.Root>
+      {children}
+    </button>
   );
 }
+
+function AppTooltip({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactElement;
+}) {
+  return (
+    <Tooltip.Provider delayDuration={300}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="tooltip-content" sideOffset={6}>
+            {label}
+            <Tooltip.Arrow className="tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  );
+}
+
+function AppDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  children,
+  className = '',
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: ReactNode;
+  description?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Content
+          className={`dialog-content${className ? ` ${className}` : ''}`}
+          onOpenAutoFocus={(event) => {
+            if (className === 'task-dialog') {
+              event.preventDefault();
+              const content = event.currentTarget as HTMLElement;
+              window.requestAnimationFrame(() => {
+                const firstField = content.querySelector<HTMLElement>(
+                  'input, textarea, [role="combobox"]',
+                );
+                firstField?.focus();
+              });
+            }
+          }}
+        >
+          <div className="dialog-heading">
+            <div>
+              <Dialog.Title>{title}</Dialog.Title>
+              {description && (
+                <Dialog.Description className="dialog-description">
+                  {description}
+                </Dialog.Description>
+              )}
+            </div>
+            <Dialog.Close asChild>
+              <IconButton label="关闭">
+                <X size={17} strokeWidth={1.8} />
+              </IconButton>
+            </Dialog.Close>
+          </div>
+          {children}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function AppDropdownMenu({
+  trigger,
+  children,
+  align = 'end',
+}: {
+  trigger: ReactElement;
+  children: ReactNode;
+  align?: DropdownMenu.DropdownMenuContentProps['align'];
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="dropdown-content"
+          align={align}
+          sideOffset={8}
+        >
+          {children}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 function ErrorNotice({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : '请求失败';
   return <div className="notice">{message}</div>;
@@ -255,35 +323,64 @@ function Layout() {
             <span className="brand-mark">C</span>
             {!sidebarCollapsed && <span>Codeloom</span>}
           </Link>
-          <button
-            className="icon-button sidebar-toggle"
-            aria-label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
-            onClick={() => setSidebarCollapsed((value) => !value)}
-          >
-            {sidebarCollapsed ? '→' : '←'}
-          </button>
+          <AppTooltip label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}>
+            <IconButton
+              className="sidebar-toggle"
+              label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
+              onClick={() => setSidebarCollapsed((value) => !value)}
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen size={16} strokeWidth={1.8} />
+              ) : (
+                <PanelLeftClose size={16} strokeWidth={1.8} />
+              )}
+            </IconButton>
+          </AppTooltip>
         </div>
         <nav className="sidebar-nav" aria-label="主导航">
           <NavLink className="nav-item" to="/" end>
-            <span className="nav-icon">▦</span>
+            <LayoutGrid className="nav-icon" size={16} strokeWidth={1.8} />
             {!sidebarCollapsed && <span>Tasks</span>}
           </NavLink>
           <NavLink className="nav-item" to="/runners">
-            <span className="nav-icon">◈</span>
+            <GitBranch className="nav-icon" size={16} strokeWidth={1.8} />
             {!sidebarCollapsed && <span>Runners</span>}
           </NavLink>
         </nav>
         {!sidebarCollapsed && (
           <div className="sidebar-section">
             <span className="sidebar-label">Workspace</span>
-            <span className="workspace-switcher">
-              Personal workspace <span>⌄</span>
-            </span>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button className="workspace-switcher" type="button">
+                  Personal workspace <ChevronDown size={14} strokeWidth={1.8} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  className="dropdown-content"
+                  align="start"
+                  sideOffset={8}
+                >
+                  <DropdownMenu.Label className="dropdown-label">
+                    Workspace
+                  </DropdownMenu.Label>
+                  <DropdownMenu.Item className="dropdown-item">
+                    Personal workspace
+                    <Check size={15} strokeWidth={2} />
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
           </div>
         )}
         <div className="sidebar-bottom">
-          <button className="nav-item" onClick={() => setPaletteOpen(true)}>
-            <span className="nav-icon">⌘</span>
+          <button
+            className="nav-item"
+            onClick={() => setPaletteOpen(true)}
+            type="button"
+          >
+            <CommandIcon className="nav-icon" size={16} strokeWidth={1.8} />
             {!sidebarCollapsed && (
               <>
                 <span>Command menu</span>
@@ -296,21 +393,39 @@ function Layout() {
             onClick={() =>
               setTheme((value) => (value === 'light' ? 'dark' : 'light'))
             }
+            type="button"
           >
-            <span className="nav-icon">{theme === 'light' ? '☾' : '☼'}</span>
+            {theme === 'light' ? (
+              <Moon className="nav-icon" size={16} strokeWidth={1.8} />
+            ) : (
+              <Sun className="nav-icon" size={16} strokeWidth={1.8} />
+            )}
             {!sidebarCollapsed && (
               <span>{theme === 'light' ? 'Dark mode' : 'Light mode'}</span>
             )}
           </button>
           {!sidebarCollapsed && (
-            <button className="profile-button" onClick={() => logout.mutate()}>
-              <span className="avatar">R</span>
-              <span className="profile-copy">
-                <strong>Robbie</strong>
-                <small>Personal</small>
-              </span>
-              <span className="profile-more">⋯</span>
-            </button>
+            <AppDropdownMenu
+              trigger={
+                <button className="profile-button" type="button">
+                  <span className="avatar">R</span>
+                  <span className="profile-copy">
+                    <strong>Robbie</strong>
+                    <small>Personal</small>
+                  </span>
+                  <MoreHorizontal className="profile-more" size={17} />
+                </button>
+              }
+            >
+              <DropdownMenu.Item
+                className="dropdown-item dropdown-item-danger"
+                onSelect={() => logout.mutate()}
+                disabled={logout.isPending}
+              >
+                <LogOut size={15} strokeWidth={1.8} />
+                Log out
+              </DropdownMenu.Item>
+            </AppDropdownMenu>
           )}
         </div>
       </aside>
@@ -324,47 +439,64 @@ function Layout() {
           <div className="topbar-actions">
             <button
               className="search-trigger"
+              aria-label="打开命令菜单"
               onClick={() => setPaletteOpen(true)}
+              type="button"
             >
-              <span>⌕</span> Search <kbd>⌘K</kbd>
+              <Search size={15} strokeWidth={1.8} /> Search <kbd>⌘K</kbd>
             </button>
-            <button className="icon-button" aria-label="通知">
-              ♢
-            </button>
-            <button
-              className="avatar avatar-small"
-              aria-label="用户菜单"
-              onClick={() => logout.mutate()}
+            <AppTooltip label="通知">
+              <IconButton label="通知" disabled>
+                <Bell size={17} strokeWidth={1.8} />
+              </IconButton>
+            </AppTooltip>
+            <AppDropdownMenu
+              trigger={
+                <button
+                  className="avatar avatar-small"
+                  aria-label="用户菜单"
+                  type="button"
+                >
+                  R
+                </button>
+              }
             >
-              R
-            </button>
+              <DropdownMenu.Item
+                className="dropdown-item dropdown-item-danger"
+                onSelect={() => logout.mutate()}
+                disabled={logout.isPending}
+              >
+                <LogOut size={15} strokeWidth={1.8} />
+                Log out
+              </DropdownMenu.Item>
+            </AppDropdownMenu>
           </div>
         </header>
         <main className="content">
           <Outlet />
         </main>
       </div>
-      {paletteOpen && (
-        <CommandPalette
-          onClose={() => setPaletteOpen(false)}
-          onNavigate={(path) => {
-            navigate(path);
-            setPaletteOpen(false);
-          }}
-        />
-      )}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onNavigate={(path) => {
+          navigate(path);
+          setPaletteOpen(false);
+        }}
+      />
     </div>
   );
 }
 
 function CommandPalette({
-  onClose,
+  open,
+  onOpenChange,
   onNavigate,
 }: {
-  onClose: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onNavigate: (path: string) => void;
 }) {
-  const [query, setQuery] = useState('');
   const commands = [
     { label: 'Open tasks', detail: 'View the task board', path: '/' },
     {
@@ -372,56 +504,53 @@ function CommandPalette({
       detail: 'Manage runners and profiles',
       path: '/runners',
     },
-  ].filter((command) =>
-    `${command.label} ${command.detail}`
-      .toLocaleLowerCase()
-      .includes(query.toLocaleLowerCase()),
-  );
+  ];
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="command-palette"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Command menu"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <input
-          autoFocus
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search commands…"
-        />
-        <div className="command-list">
+    <Command.Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      label="Command menu"
+      overlayClassName="command-overlay"
+      contentClassName="command-palette"
+      loop
+    >
+      <Command.Input placeholder="Search commands…" />
+      <Command.List>
+        <Command.Empty className="empty-state">
+          No commands found.
+        </Command.Empty>
+        <Command.Group heading="Navigation">
           {commands.map((command) => (
-            <button
+            <Command.Item
               className="command-item"
               key={command.path}
-              onClick={() => onNavigate(command.path)}
+              value={`${command.label} ${command.detail}`}
+              onSelect={() => onNavigate(command.path)}
             >
-              <span className="command-symbol">↗</span>
+              <ExternalLink
+                size={15}
+                strokeWidth={1.8}
+                className="command-symbol"
+              />
               <span>
                 <strong>{command.label}</strong>
                 <small>{command.detail}</small>
               </span>
               <span className="muted">Enter</span>
-            </button>
+            </Command.Item>
           ))}
-          {commands.length === 0 && (
-            <p className="empty-state">No commands found.</p>
-          )}
-        </div>
-        <footer>
-          <span>
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> Navigate
-          </span>
-          <span>
-            <kbd>Esc</kbd> Close
-          </span>
-        </footer>
-      </section>
-    </div>
+        </Command.Group>
+      </Command.List>
+      <footer>
+        <span>
+          <kbd>↑</kbd>
+          <kbd>↓</kbd> Navigate
+        </span>
+        <span>
+          <kbd>Esc</kbd> Close
+        </span>
+      </footer>
+    </Command.Dialog>
   );
 }
 
@@ -475,24 +604,33 @@ function TasksPage() {
           <h1 className="page-title">Tasks</h1>
           <p className="page-subtitle">A focused space for your team's work.</p>
         </div>
-        <button className="primary-action" onClick={() => setCreateOpen(true)}>
-          <span>＋</span> New task
+        <button
+          className="primary-action"
+          onClick={() => setCreateOpen(true)}
+          type="button"
+        >
+          <Plus size={15} strokeWidth={2} /> New task
         </button>
       </section>
       <section className="board-toolbar">
         <div className="toolbar-left">
           <label className="board-search">
-            <span>⌕</span>
+            <Search size={15} strokeWidth={1.8} />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Filter tasks…"
             />
           </label>
-          <div className="filter-chips">
+          <div
+            className="filter-chips"
+            role="group"
+            aria-label="Priority filter"
+          >
             <button
               className={`filter-chip${priorityFilter === 'all' ? ' selected' : ''}`}
               onClick={() => setPriorityFilter('all')}
+              type="button"
             >
               All tasks <span>{tasks.data.length}</span>
             </button>
@@ -501,6 +639,7 @@ function TasksPage() {
                 className={`filter-chip priority-${value}${priorityFilter === value ? ' selected' : ''}`}
                 key={value}
                 onClick={() => setPriorityFilter(value)}
+                type="button"
               >
                 <span className="priority-dot" />
                 {TASK_PRIORITY_LABELS[value]}
@@ -508,24 +647,35 @@ function TasksPage() {
             ))}
           </div>
         </div>
-        <div className="view-toggle">
-          <button
-            className={view === 'board' ? 'active' : ''}
-            onClick={() => setView('board')}
+        <ToggleGroup.Root
+          className="view-toggle"
+          type="single"
+          value={view}
+          onValueChange={(value) => {
+            if (value) setView(value as 'board' | 'list');
+          }}
+          aria-label="Task view"
+        >
+          <ToggleGroup.Item
+            className="view-toggle-item"
+            value="board"
+            aria-label="Board view"
           >
-            ▦ Board
-          </button>
-          <button
-            className={view === 'list' ? 'active' : ''}
-            onClick={() => setView('list')}
+            <LayoutGrid size={14} strokeWidth={1.8} /> Board
+          </ToggleGroup.Item>
+          <ToggleGroup.Item
+            className="view-toggle-item"
+            value="list"
+            aria-label="List view"
           >
-            ☷ List
-          </button>
-        </div>
+            <List size={14} strokeWidth={1.8} /> List
+          </ToggleGroup.Item>
+        </ToggleGroup.Root>
       </section>
       {view === 'board' ? (
         <TaskBoard
           tasks={visibleTasks}
+          onAddTask={() => setCreateOpen(true)}
           onMove={(task, status) => {
             if (!canMoveTask(task, status) || task.status === status) return;
             void api
@@ -538,6 +688,7 @@ function TasksPage() {
       )}
       {createOpen && (
         <CreateTaskDialog
+          open={createOpen}
           title={title}
           description={description}
           priority={priority}
@@ -560,9 +711,11 @@ function TasksPage() {
 function TaskBoard({
   tasks,
   onMove,
+  onAddTask,
 }: {
   tasks: Task[];
   onMove: (task: Task, status: TaskStatus) => void;
+  onAddTask?: () => void;
 }) {
   return (
     <div className="task-board">
@@ -574,12 +727,14 @@ function TaskBoard({
               <span className={`column-dot column-${status}`} />
               <h2>{TASK_STATUS_LABELS[status]}</h2>
               <span className="column-count">{columnTasks.length}</span>
-              <button
-                className="column-menu"
-                aria-label={`${TASK_STATUS_LABELS[status]} menu`}
-              >
-                ⋯
-              </button>
+              <AppTooltip label={`${TASK_STATUS_LABELS[status]} menu`}>
+                <IconButton
+                  label={`${TASK_STATUS_LABELS[status]} menu`}
+                  disabled
+                >
+                  <MoreHorizontal size={16} strokeWidth={1.8} />
+                </IconButton>
+              </AppTooltip>
             </header>
             <div className="task-column-body">
               {columnTasks.map((task) => (
@@ -589,8 +744,12 @@ function TaskBoard({
                 <div className="empty-column">No tasks</div>
               )}
             </div>
-            <button className="add-task-inline">
-              <span>＋</span> Add task
+            <button
+              className="add-task-inline"
+              onClick={onAddTask}
+              type="button"
+            >
+              <Plus size={14} strokeWidth={1.8} /> Add task
             </button>
           </section>
         );
@@ -661,6 +820,7 @@ function TaskCard({
 }
 
 function CreateTaskDialog({
+  open,
   title,
   description,
   priority,
@@ -675,6 +835,7 @@ function CreateTaskDialog({
   onClose,
   onSubmit,
 }: {
+  open: boolean;
   title: string;
   description: string;
   priority: TaskPriority | '';
@@ -690,93 +851,84 @@ function CreateTaskDialog({
   onSubmit: () => void;
 }) {
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="dialog card"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Create task"
-        onMouseDown={(event) => event.stopPropagation()}
+    <AppDialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+      title="Create task"
+      description="Add a focused piece of work to your workspace."
+      className="task-dialog"
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
       >
-        <div className="dialog-heading">
-          <div>
-            <span className="eyebrow">New item</span>
-            <h2>Create task</h2>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="关闭">
-            ×
-          </button>
+        <label>
+          Title
+          <input
+            autoFocus
+            value={title}
+            onChange={(event) => onTitle(event.target.value)}
+            required
+            placeholder="What needs to be done?"
+          />
+        </label>
+        <label>
+          Description
+          <textarea
+            value={description}
+            onChange={(event) => onDescription(event.target.value)}
+            placeholder="Add context for the task…"
+          />
+        </label>
+        <div className="grid two">
+          <label>
+            Priority
+            <AppSelect
+              value={priority}
+              onValueChange={(value) => onPriority(value as TaskPriority | '')}
+              options={[
+                { value: '', label: 'No priority' },
+                ...TASK_PRIORITIES.map((value) => ({
+                  value,
+                  label: TASK_PRIORITY_LABELS[value],
+                })),
+              ]}
+              placeholder="No priority"
+            />
+          </label>
+          <label>
+            Repository
+            <AppSelect
+              value={repositoryId}
+              onValueChange={onRepository}
+              options={[
+                { value: '', label: 'Not linked' },
+                ...repositories.map((repository) => ({
+                  value: repository.id,
+                  label: repository.name,
+                })),
+              ]}
+              placeholder="Not linked"
+            />
+          </label>
         </div>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmit();
-          }}
-        >
-          <label>
-            Title
-            <input
-              autoFocus
-              value={title}
-              onChange={(event) => onTitle(event.target.value)}
-              required
-              placeholder="What needs to be done?"
-            />
-          </label>
-          <label>
-            Description
-            <textarea
-              value={description}
-              onChange={(event) => onDescription(event.target.value)}
-              placeholder="Add context for the task…"
-            />
-          </label>
-          <div className="grid two">
-            <label>
-              Priority
-              <AppSelect
-                value={priority}
-                onValueChange={(value) =>
-                  onPriority(value as TaskPriority | '')
-                }
-                options={[
-                  { value: '', label: 'No priority' },
-                  ...TASK_PRIORITIES.map((value) => ({
-                    value,
-                    label: TASK_PRIORITY_LABELS[value],
-                  })),
-                ]}
-                placeholder="No priority"
-              />
-            </label>
-            <label>
-              Repository
-              <AppSelect
-                value={repositoryId}
-                onValueChange={onRepository}
-                options={[
-                  { value: '', label: 'Not linked' },
-                  ...repositories.map((repository) => ({
-                    value: repository.id,
-                    label: repository.name,
-                  })),
-                ]}
-                placeholder="Not linked"
-              />
-            </label>
-          </div>
-          {error instanceof Error && <ErrorNotice error={error} />}
-          <div className="dialog-actions">
-            <button type="button" className="secondary" onClick={onClose}>
+        {error instanceof Error && <ErrorNotice error={error} />}
+        <div className="dialog-actions">
+          <Dialog.Close asChild>
+            <button type="button" className="secondary">
               Cancel
             </button>
-            <button type="submit" disabled={pending}>
-              {pending ? 'Creating…' : 'Create task'}
-            </button>
-          </div>
-        </form>
-      </section>
-    </div>
+          </Dialog.Close>
+          <button type="submit" disabled={pending}>
+            {pending ? 'Creating…' : 'Create task'}
+          </button>
+        </div>
+      </form>
+    </AppDialog>
   );
 }
 
@@ -882,8 +1034,8 @@ function TaskPage() {
   if (!task) return <ErrorNotice error={new Error('Task not found')} />;
   return (
     <div className="grid">
-      <Link className="muted" to="/">
-        ← 返回任务
+      <Link className="muted back-link" to="/">
+        <ArrowLeft size={14} strokeWidth={1.8} /> 返回任务
       </Link>
       <section className="card">
         <h2 className="title">{task.title}</h2>
@@ -1508,8 +1660,8 @@ function RunPage() {
     .sort((left, right) => left.number - right.number);
   return (
     <div className="grid">
-      <Link className="muted" to={`/tasks/${run.data.run.taskId}`}>
-        ← 返回任务
+      <Link className="muted back-link" to={`/tasks/${run.data.run.taskId}`}>
+        <ArrowLeft size={14} strokeWidth={1.8} /> 返回任务
       </Link>
       <section className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
