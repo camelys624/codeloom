@@ -1,5 +1,37 @@
-import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
+import { StrictMode, forwardRef, useEffect, useRef, useState } from 'react';
+import type {
+  ComponentPropsWithoutRef,
+  DragEvent,
+  ReactElement,
+  ReactNode,
+} from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+import * as ToggleGroup from '@radix-ui/react-toggle-group';
+import * as Tooltip from '@radix-ui/react-tooltip';
+import { Command } from 'cmdk';
 import { createRoot } from 'react-dom/client';
+import {
+  ArrowLeft,
+  Bell,
+  Check,
+  ChevronDown,
+  Command as CommandIcon,
+  Download,
+  ExternalLink,
+  GitBranch,
+  LayoutGrid,
+  List,
+  LogOut,
+  MoreHorizontal,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  Sun,
+  X,
+} from 'lucide-react';
 import {
   Link,
   NavLink,
@@ -24,10 +56,28 @@ import {
   type RunEvent,
   type Runner,
   type Task,
+  type TaskStatus,
   type TranscriptChunk,
 } from '@agent-workspace/contracts';
+import { AppSelect } from './components/ui/select.js';
 import { api, ApiError, type RunSnapshot } from './lib/api.js';
 import { AttemptStream } from './lib/stream.js';
+import { buildTimeline, type TimelineEntry } from './lib/timeline.js';
+import {
+  countTranscriptFrames,
+  filterTranscriptChunks,
+  transcriptToText,
+} from './lib/transcript.js';
+import {
+  canMoveTask,
+  sortTasks,
+  TASK_COLUMNS,
+  TASK_PRIORITY_LABELS,
+  TASK_PRIORITIES,
+  TASK_STATUS_LABELS,
+  taskMatchesFilters,
+  type TaskPriority,
+} from './lib/tasks.js';
 import './styles.css';
 
 const queryClient = new QueryClient({
@@ -35,6 +85,132 @@ const queryClient = new QueryClient({
     queries: { staleTime: 5_000, refetchOnWindowFocus: false },
   },
 });
+
+const IconButton = forwardRef<
+  HTMLButtonElement,
+  Omit<ComponentPropsWithoutRef<'button'>, 'children' | 'aria-label'> & {
+    label: string;
+    children: ReactElement;
+  }
+>(function IconButton(
+  { label, children, className = '', type = 'button', ...props },
+  ref,
+) {
+  return (
+    <button
+      ref={ref}
+      className={`icon-button${className ? ` ${className}` : ''}`}
+      aria-label={label}
+      type={type}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+});
+
+function AppTooltip({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactElement;
+}) {
+  return (
+    <Tooltip.Provider delayDuration={300}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="tooltip-content" sideOffset={6}>
+            {label}
+            <Tooltip.Arrow className="tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  );
+}
+
+function AppDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  children,
+  className = '',
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: ReactNode;
+  description?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Content
+          className={`dialog-content${className ? ` ${className}` : ''}`}
+          onOpenAutoFocus={(event) => {
+            if (className === 'task-dialog') {
+              event.preventDefault();
+              const content = event.currentTarget as HTMLElement;
+              window.requestAnimationFrame(() => {
+                const firstField = content.querySelector<HTMLElement>(
+                  'input, textarea, [role="combobox"]',
+                );
+                firstField?.focus();
+              });
+            }
+          }}
+        >
+          <div className="dialog-heading">
+            <div>
+              <Dialog.Title>{title}</Dialog.Title>
+              {description && (
+                <Dialog.Description className="dialog-description">
+                  {description}
+                </Dialog.Description>
+              )}
+            </div>
+            <Dialog.Close asChild>
+              <IconButton label="关闭">
+                <X size={17} strokeWidth={1.8} />
+              </IconButton>
+            </Dialog.Close>
+          </div>
+          {children}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function AppDropdownMenu({
+  trigger,
+  children,
+  align = 'end',
+}: {
+  trigger: ReactElement;
+  children: ReactNode;
+  align?: DropdownMenu.DropdownMenuContentProps['align'];
+}) {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="dropdown-content"
+          align={align}
+          sideOffset={8}
+        >
+          {children}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
 
 function ErrorNotice({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : '请求失败';
@@ -121,35 +297,269 @@ function AuthPage() {
 
 function Layout() {
   const client = useQueryClient();
+  const navigate = useNavigate();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const logout = useMutation({
     mutationFn: api.logout,
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['me'] });
     },
   });
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem('codeloom-theme');
+    if (savedTheme === 'dark') setTheme('dark');
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteOpen(true);
+      }
+      if (event.key === 'Escape') setPaletteOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem('codeloom-theme', theme);
+  }, [theme]);
   return (
-    <div className="shell">
+    <div className={`shell${sidebarCollapsed ? ' shell-collapsed' : ''}`}>
       <aside className="sidebar">
-        <h1>Codeloom</h1>
-        <nav>
-          <NavLink to="/" end>
-            Tasks
+        <div className="brand-row">
+          <Link className="brand" to="/">
+            <span className="brand-mark">C</span>
+            {!sidebarCollapsed && <span>Codeloom</span>}
+          </Link>
+          <AppTooltip label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}>
+            <IconButton
+              className="sidebar-toggle"
+              label={sidebarCollapsed ? '展开侧栏' : '折叠侧栏'}
+              onClick={() => setSidebarCollapsed((value) => !value)}
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen size={16} strokeWidth={1.8} />
+              ) : (
+                <PanelLeftClose size={16} strokeWidth={1.8} />
+              )}
+            </IconButton>
+          </AppTooltip>
+        </div>
+        <nav className="sidebar-nav" aria-label="主导航">
+          <NavLink className="nav-item" to="/" end>
+            <LayoutGrid className="nav-icon" size={16} strokeWidth={1.8} />
+            {!sidebarCollapsed && <span>Tasks</span>}
           </NavLink>
-          <NavLink to="/runners">Runners</NavLink>
+          <NavLink className="nav-item" to="/runners">
+            <GitBranch className="nav-icon" size={16} strokeWidth={1.8} />
+            {!sidebarCollapsed && <span>Runners</span>}
+          </NavLink>
         </nav>
+        {!sidebarCollapsed && (
+          <div className="sidebar-section">
+            <span className="sidebar-label">Workspace</span>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button className="workspace-switcher" type="button">
+                  Personal workspace <ChevronDown size={14} strokeWidth={1.8} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  className="dropdown-content"
+                  align="start"
+                  sideOffset={8}
+                >
+                  <DropdownMenu.Label className="dropdown-label">
+                    Workspace
+                  </DropdownMenu.Label>
+                  <DropdownMenu.Item className="dropdown-item">
+                    Personal workspace
+                    <Check size={15} strokeWidth={2} />
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
+        )}
+        <div className="sidebar-bottom">
+          <button
+            className="nav-item"
+            onClick={() => setPaletteOpen(true)}
+            type="button"
+          >
+            <CommandIcon className="nav-icon" size={16} strokeWidth={1.8} />
+            {!sidebarCollapsed && (
+              <>
+                <span>Command menu</span>
+                <kbd>⌘K</kbd>
+              </>
+            )}
+          </button>
+          <button
+            className="nav-item"
+            onClick={() =>
+              setTheme((value) => (value === 'light' ? 'dark' : 'light'))
+            }
+            type="button"
+          >
+            {theme === 'light' ? (
+              <Moon className="nav-icon" size={16} strokeWidth={1.8} />
+            ) : (
+              <Sun className="nav-icon" size={16} strokeWidth={1.8} />
+            )}
+            {!sidebarCollapsed && (
+              <span>{theme === 'light' ? 'Dark mode' : 'Light mode'}</span>
+            )}
+          </button>
+          {!sidebarCollapsed && (
+            <AppDropdownMenu
+              trigger={
+                <button className="profile-button" type="button">
+                  <span className="avatar">R</span>
+                  <span className="profile-copy">
+                    <strong>Robbie</strong>
+                    <small>Personal</small>
+                  </span>
+                  <MoreHorizontal className="profile-more" size={17} />
+                </button>
+              }
+            >
+              <DropdownMenu.Item
+                className="dropdown-item dropdown-item-danger"
+                onSelect={() => logout.mutate()}
+                disabled={logout.isPending}
+              >
+                <LogOut size={15} strokeWidth={1.8} />
+                Log out
+              </DropdownMenu.Item>
+            </AppDropdownMenu>
+          )}
+        </div>
       </aside>
       <div className="main">
         <header className="topbar">
-          <span className="muted">阶段 1 · 本地 Runner</span>
-          <button className="secondary" onClick={() => logout.mutate()}>
-            退出
-          </button>
+          <div className="breadcrumbs">
+            <span className="muted">Workspace</span>
+            <span>/</span>
+            <strong>Tasks</strong>
+          </div>
+          <div className="topbar-actions">
+            <button
+              className="search-trigger"
+              aria-label="打开命令菜单"
+              onClick={() => setPaletteOpen(true)}
+              type="button"
+            >
+              <Search size={15} strokeWidth={1.8} /> Search <kbd>⌘K</kbd>
+            </button>
+            <AppTooltip label="通知">
+              <IconButton label="通知" disabled>
+                <Bell size={17} strokeWidth={1.8} />
+              </IconButton>
+            </AppTooltip>
+            <AppDropdownMenu
+              trigger={
+                <button
+                  className="avatar avatar-small"
+                  aria-label="用户菜单"
+                  type="button"
+                >
+                  R
+                </button>
+              }
+            >
+              <DropdownMenu.Item
+                className="dropdown-item dropdown-item-danger"
+                onSelect={() => logout.mutate()}
+                disabled={logout.isPending}
+              >
+                <LogOut size={15} strokeWidth={1.8} />
+                Log out
+              </DropdownMenu.Item>
+            </AppDropdownMenu>
+          </div>
         </header>
         <main className="content">
           <Outlet />
         </main>
       </div>
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onNavigate={(path) => {
+          navigate(path);
+          setPaletteOpen(false);
+        }}
+      />
     </div>
+  );
+}
+
+function CommandPalette({
+  open,
+  onOpenChange,
+  onNavigate,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onNavigate: (path: string) => void;
+}) {
+  const commands = [
+    { label: 'Open tasks', detail: 'View the task board', path: '/' },
+    {
+      label: 'Open runners',
+      detail: 'Manage runners and profiles',
+      path: '/runners',
+    },
+  ];
+  return (
+    <Command.Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      label="Command menu"
+      overlayClassName="command-overlay"
+      contentClassName="command-palette"
+      loop
+    >
+      <Command.Input placeholder="Search commands…" />
+      <Command.List>
+        <Command.Empty className="empty-state">
+          No commands found.
+        </Command.Empty>
+        <Command.Group heading="Navigation">
+          {commands.map((command) => (
+            <Command.Item
+              className="command-item"
+              key={command.path}
+              value={`${command.label} ${command.detail}`}
+              onSelect={() => onNavigate(command.path)}
+            >
+              <ExternalLink
+                size={15}
+                strokeWidth={1.8}
+                className="command-symbol"
+              />
+              <span>
+                <strong>{command.label}</strong>
+                <small>{command.detail}</small>
+              </span>
+              <span className="muted">Enter</span>
+            </Command.Item>
+          ))}
+        </Command.Group>
+      </Command.List>
+      <footer>
+        <span>
+          <kbd>↑</kbd>
+          <kbd>↓</kbd> Navigate
+        </span>
+        <span>
+          <kbd>Esc</kbd> Close
+        </span>
+      </footer>
+    </Command.Dialog>
   );
 }
 
@@ -159,103 +569,476 @@ function TasksPage() {
     queryKey: ['repositories'],
     queryFn: api.repositories,
   });
+  const client = useQueryClient();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [repositoryId, setRepositoryId] = useState('');
-  const client = useQueryClient();
+  const [priority, setPriority] = useState<TaskPriority | ''>('');
+  const [query, setQuery] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState<TaskPriority | 'all'>(
+    'all',
+  );
+  const [view, setView] = useState<'board' | 'list'>('board');
+  const [createOpen, setCreateOpen] = useState(false);
   const create = useMutation({
     mutationFn: () =>
       api.createTask({
         title,
         description,
+        priority: priority || undefined,
         repositoryId: repositoryId || null,
       }),
     onSuccess: () => {
       setTitle('');
       setDescription('');
+      setPriority('');
       setRepositoryId('');
+      setCreateOpen(false);
       void client.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
+  const move = useMutation({
+    mutationFn: ({ task, status }: { task: Task; status: TaskStatus }) =>
+      api.updateTask(task.id, { revision: task.revision, status }),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: ['tasks'] });
+    },
+  });
+  const updatingTaskId = move.isPending ? move.variables?.task.id : undefined;
+  const handleMove = (task: Task, status: TaskStatus) => {
+    if (move.isPending || task.status === status || !canMoveTask(task, status))
+      return;
+    move.mutate({ task, status });
+  };
   if (tasks.isPending || repositories.isPending) return <p>加载任务…</p>;
   if (tasks.error || repositories.error)
     return <ErrorNotice error={tasks.error ?? repositories.error} />;
+  const visibleTasks = sortTasks(
+    tasks.data.filter((task) =>
+      taskMatchesFilters(task, query, priorityFilter),
+    ),
+  );
   return (
-    <div className="grid">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+    <div className="tasks-page">
+      <section className="page-heading">
         <div>
-          <h2 className="title">Tasks</h2>
-          <p className="muted">任务是长期工作意图；Run 承载一次执行。</p>
+          <span className="eyebrow">Workspace</span>
+          <h1 className="page-title">Tasks</h1>
+          <p className="page-subtitle">A focused space for your team's work.</p>
         </div>
-        <Link className="badge" to="/runners">
-          配置 Runner
-        </Link>
-      </div>
-      <section className="card">
-        <h3>创建任务</h3>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            create.mutate();
-          }}
+        <button
+          className="primary-action"
+          onClick={() => setCreateOpen(true)}
+          type="button"
         >
-          <label>
-            标题
+          <Plus size={15} strokeWidth={2} /> New task
+        </button>
+      </section>
+      <section className="board-toolbar">
+        <div className="toolbar-left">
+          <label className="board-search">
+            <Search size={15} strokeWidth={1.8} />
             <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              required
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter tasks…"
             />
           </label>
-          <label>
-            描述
-            <textarea
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </label>
-          <label>
-            Repository
-            <select
-              value={repositoryId}
-              onChange={(event) => setRepositoryId(event.target.value)}
+          <div
+            className="filter-chips"
+            role="group"
+            aria-label="Priority filter"
+          >
+            <button
+              className={`filter-chip${priorityFilter === 'all' ? ' selected' : ''}`}
+              onClick={() => setPriorityFilter('all')}
+              type="button"
             >
-              <option value="">不绑定</option>
-              {repositories.data.map((repository) => (
-                <option key={repository.id} value={repository.id}>
-                  {repository.name} ({repository.defaultRef})
-                </option>
-              ))}
-            </select>
-          </label>
-          <div>
-            <button disabled={create.isPending}>创建</button>
+              All tasks <span>{tasks.data.length}</span>
+            </button>
+            {TASK_PRIORITIES.map((value) => (
+              <button
+                className={`filter-chip priority-${value}${priorityFilter === value ? ' selected' : ''}`}
+                key={value}
+                onClick={() => setPriorityFilter(value)}
+                type="button"
+              >
+                <span className="priority-dot" />
+                {TASK_PRIORITY_LABELS[value]}
+              </button>
+            ))}
           </div>
-        </form>
-        {create.error && <ErrorNotice error={create.error} />}
+        </div>
+        <ToggleGroup.Root
+          className="view-toggle"
+          type="single"
+          value={view}
+          onValueChange={(value) => {
+            if (value) setView(value as 'board' | 'list');
+          }}
+          aria-label="Task view"
+        >
+          <ToggleGroup.Item
+            className="view-toggle-item"
+            value="board"
+            aria-label="Board view"
+          >
+            <LayoutGrid size={14} strokeWidth={1.8} /> Board
+          </ToggleGroup.Item>
+          <ToggleGroup.Item
+            className="view-toggle-item"
+            value="list"
+            aria-label="List view"
+          >
+            <List size={14} strokeWidth={1.8} /> List
+          </ToggleGroup.Item>
+        </ToggleGroup.Root>
       </section>
-      <section className="list">
-        {tasks.data.length === 0 ? (
-          <div className="card muted">还没有任务。</div>
-        ) : (
-          tasks.data.map((task) => <TaskRow key={task.id} task={task} />)
-        )}
-      </section>
+      {move.error && <ErrorNotice error={move.error} />}
+      {view === 'board' ? (
+        <TaskBoard
+          tasks={visibleTasks}
+          updatingTaskId={updatingTaskId}
+          onAddTask={() => setCreateOpen(true)}
+          onMove={handleMove}
+        />
+      ) : (
+        <TaskList
+          tasks={visibleTasks}
+          updatingTaskId={updatingTaskId}
+          onMove={handleMove}
+        />
+      )}
+      {createOpen && (
+        <CreateTaskDialog
+          open={createOpen}
+          title={title}
+          description={description}
+          priority={priority}
+          repositoryId={repositoryId}
+          repositories={repositories.data}
+          pending={create.isPending}
+          error={create.error}
+          onTitle={setTitle}
+          onDescription={setDescription}
+          onPriority={setPriority}
+          onRepository={setRepositoryId}
+          onClose={() => setCreateOpen(false)}
+          onSubmit={() => create.mutate()}
+        />
+      )}
     </div>
   );
 }
 
-function TaskRow({ task }: { task: Task }) {
+function TaskBoard({
+  tasks,
+  onMove,
+  onAddTask,
+  updatingTaskId,
+}: {
+  tasks: Task[];
+  onMove: (task: Task, status: TaskStatus) => void;
+  onAddTask?: () => void;
+  updatingTaskId?: string;
+}) {
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dropStatus, setDropStatus] = useState<TaskStatus | null>(null);
+  const draggedTask = draggedTaskId
+    ? tasks.find((task) => task.id === draggedTaskId)
+    : undefined;
+  const clearDrag = () => {
+    setDraggedTaskId(null);
+    setDropStatus(null);
+  };
+  const handleDrop = (status: TaskStatus, event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    const taskId = event.dataTransfer.getData('text/plain') || draggedTaskId;
+    const task = taskId ? tasks.find((item) => item.id === taskId) : undefined;
+    clearDrag();
+    if (task && task.status !== status && canMoveTask(task, status))
+      onMove(task, status);
+  };
   return (
-    <Link className="list-item" to={`/tasks/${task.id}`}>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <strong>{task.title}</strong>
-        <span className="badge">{task.status}</span>
+    <div className="task-board">
+      {TASK_COLUMNS.map((status) => {
+        const columnTasks = tasks.filter((task) => task.status === status);
+        const canDrop =
+          draggedTask !== undefined &&
+          draggedTask.status !== status &&
+          canMoveTask(draggedTask, status);
+        const dropClass =
+          dropStatus === status
+            ? canDrop
+              ? ' is-drop-target'
+              : ' is-drop-invalid'
+            : '';
+        return (
+          <section
+            aria-label={`${TASK_STATUS_LABELS[status]} tasks`}
+            className={`task-column${dropClass}`}
+            key={status}
+            onDragLeave={(event) => {
+              const relatedTarget = event.relatedTarget as Node | null;
+              if (
+                !relatedTarget ||
+                !event.currentTarget.contains(relatedTarget)
+              )
+                setDropStatus(null);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = canDrop ? 'move' : 'none';
+              setDropStatus(status);
+            }}
+            onDrop={(event) => handleDrop(status, event)}
+          >
+            <header>
+              <span className={`column-dot column-${status}`} />
+              <h2>{TASK_STATUS_LABELS[status]}</h2>
+              <span className="column-count">{columnTasks.length}</span>
+              <AppTooltip label={`${TASK_STATUS_LABELS[status]} menu`}>
+                <IconButton
+                  label={`${TASK_STATUS_LABELS[status]} menu`}
+                  disabled
+                >
+                  <MoreHorizontal size={16} strokeWidth={1.8} />
+                </IconButton>
+              </AppTooltip>
+            </header>
+            <div className="task-column-body">
+              {columnTasks.map((task) => (
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  isDragging={task.id === draggedTaskId}
+                  isUpdating={task.id === updatingTaskId}
+                  onDragEnd={clearDrag}
+                  onDragStart={(event) => {
+                    setDraggedTaskId(task.id);
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', task.id);
+                  }}
+                  onMove={onMove}
+                />
+              ))}
+              {columnTasks.length === 0 && (
+                <div className="empty-column">No tasks</div>
+              )}
+            </div>
+            <button
+              className="add-task-inline"
+              onClick={onAddTask}
+              type="button"
+            >
+              <Plus size={14} strokeWidth={1.8} /> Add task
+            </button>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskList({
+  tasks,
+  onMove,
+  updatingTaskId,
+}: {
+  tasks: Task[];
+  onMove: (task: Task, status: TaskStatus) => void;
+  updatingTaskId?: string;
+}) {
+  return (
+    <section className="task-list-view">
+      {tasks.map((task) => (
+        <TaskCard
+          key={task.id}
+          task={task}
+          isUpdating={task.id === updatingTaskId}
+          onMove={onMove}
+        />
+      ))}
+      {tasks.length === 0 && (
+        <div className="empty-state">No tasks match these filters.</div>
+      )}
+    </section>
+  );
+}
+
+function TaskCard({
+  task,
+  onMove,
+  onDragStart,
+  onDragEnd,
+  isDragging = false,
+  isUpdating = false,
+}: {
+  task: Task;
+  onMove?: (task: Task, status: TaskStatus) => void;
+  onDragStart?: (event: DragEvent<HTMLAnchorElement>) => void;
+  onDragEnd?: () => void;
+  isDragging?: boolean;
+  isUpdating?: boolean;
+}) {
+  return (
+    <Link
+      className={`task-card${isDragging ? ' is-dragging' : ''}`}
+      draggable={Boolean(onDragStart)}
+      onDragEnd={onDragEnd}
+      onDragStart={onDragStart}
+      to={`/tasks/${task.id}`}
+    >
+      <div className="task-card-top">
+        <span
+          className={`priority-indicator priority-${task.priority ?? 'none'}`}
+          aria-label={
+            task.priority ? TASK_PRIORITY_LABELS[task.priority] : 'No priority'
+          }
+        />
+        {task.priority && (
+          <span className="task-priority">
+            {TASK_PRIORITY_LABELS[task.priority]}
+          </span>
+        )}
+        <span className="task-id">
+          {task.id.replace(/^tsk_/, '#').slice(0, 9)}
+        </span>
       </div>
-      <p className="muted small">
-        {task.description || '无描述'} · revision {task.revision}
-      </p>
+      <strong className="task-card-title">{task.title}</strong>
+      {task.description && <p>{task.description}</p>}
+      <div className="task-card-footer">
+        <span className="task-assignee">R</span>
+        <span className="task-revision">↻ {task.revision}</span>
+        {onMove && (
+          <AppSelect
+            value={task.status}
+            disabled={isUpdating}
+            onValueChange={(value) => onMove(task, value as TaskStatus)}
+            options={TASK_COLUMNS.map((status) => ({
+              value: status,
+              label: TASK_STATUS_LABELS[status],
+            }))}
+            ariaLabel="Change task status"
+            className="task-status-select"
+            stopPropagation
+          />
+        )}
+      </div>
     </Link>
+  );
+}
+
+function CreateTaskDialog({
+  open,
+  title,
+  description,
+  priority,
+  repositoryId,
+  repositories,
+  pending,
+  error,
+  onTitle,
+  onDescription,
+  onPriority,
+  onRepository,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  title: string;
+  description: string;
+  priority: TaskPriority | '';
+  repositoryId: string;
+  repositories: Awaited<ReturnType<typeof api.repositories>>;
+  pending: boolean;
+  error: unknown;
+  onTitle: (value: string) => void;
+  onDescription: (value: string) => void;
+  onPriority: (value: TaskPriority | '') => void;
+  onRepository: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <AppDialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose();
+      }}
+      title="Create task"
+      description="Add a focused piece of work to your workspace."
+      className="task-dialog"
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        <label>
+          Title
+          <input
+            autoFocus
+            value={title}
+            onChange={(event) => onTitle(event.target.value)}
+            required
+            placeholder="What needs to be done?"
+          />
+        </label>
+        <label>
+          Description
+          <textarea
+            value={description}
+            onChange={(event) => onDescription(event.target.value)}
+            placeholder="Add context for the task…"
+          />
+        </label>
+        <div className="grid two">
+          <label>
+            Priority
+            <AppSelect
+              value={priority}
+              onValueChange={(value) => onPriority(value as TaskPriority | '')}
+              options={[
+                { value: '', label: 'No priority' },
+                ...TASK_PRIORITIES.map((value) => ({
+                  value,
+                  label: TASK_PRIORITY_LABELS[value],
+                })),
+              ]}
+              placeholder="No priority"
+            />
+          </label>
+          <label>
+            Repository
+            <AppSelect
+              value={repositoryId}
+              onValueChange={onRepository}
+              options={[
+                { value: '', label: 'Not linked' },
+                ...repositories.map((repository) => ({
+                  value: repository.id,
+                  label: repository.name,
+                })),
+              ]}
+              placeholder="Not linked"
+            />
+          </label>
+        </div>
+        {error instanceof Error && <ErrorNotice error={error} />}
+        <div className="dialog-actions">
+          <Dialog.Close asChild>
+            <button type="button" className="secondary">
+              Cancel
+            </button>
+          </Dialog.Close>
+          <button type="submit" disabled={pending}>
+            {pending ? 'Creating…' : 'Create task'}
+          </button>
+        </div>
+      </form>
+    </AppDialog>
   );
 }
 
@@ -361,8 +1144,8 @@ function TaskPage() {
   if (!task) return <ErrorNotice error={new Error('Task not found')} />;
   return (
     <div className="grid">
-      <Link className="muted" to="/">
-        ← 返回任务
+      <Link className="muted back-link" to="/">
+        <ArrowLeft size={14} strokeWidth={1.8} /> 返回任务
       </Link>
       <section className="card">
         <h2 className="title">{task.title}</h2>
@@ -399,20 +1182,19 @@ function TaskPage() {
         <h3>Repository</h3>
         <label>
           绑定代码库
-          <select
+          <AppSelect
             value={task.repositoryId ?? ''}
             disabled={bindRepository.isPending}
-            onChange={(event) =>
-              bindRepository.mutate(event.target.value || null)
-            }
-          >
-            <option value="">不绑定</option>
-            {repositories.data.map((repository) => (
-              <option key={repository.id} value={repository.id}>
-                {repository.name} ({repository.defaultRef})
-              </option>
-            ))}
-          </select>
+            onValueChange={(value) => bindRepository.mutate(value || null)}
+            options={[
+              { value: '', label: '不绑定' },
+              ...repositories.data.map((repository) => ({
+                value: repository.id,
+                label: `${repository.name} (${repository.defaultRef})`,
+              })),
+            ]}
+            placeholder="不绑定"
+          />
         </label>
         {bindRepository.error && <ErrorNotice error={bindRepository.error} />}
       </section>
@@ -427,36 +1209,38 @@ function TaskPage() {
           >
             <label>
               Runner
-              <select
+              <AppSelect
                 value={runnerId}
-                onChange={(event) => {
-                  setRunnerId(event.target.value);
+                onValueChange={(value) => {
+                  setRunnerId(value);
                   setProfileId('');
                 }}
+                options={[
+                  { value: '', label: '选择 Runner' },
+                  ...runners.data.map((runner) => ({
+                    value: runner.id,
+                    label: `${runner.name} (${runner.status})`,
+                  })),
+                ]}
+                placeholder="选择 Runner"
                 required
-              >
-                <option value="">选择 Runner</option>
-                {runners.data.map((runner) => (
-                  <option key={runner.id} value={runner.id}>
-                    {runner.name} ({runner.status})
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             <label>
               Agent Profile
-              <select
+              <AppSelect
                 value={profileId}
-                onChange={(event) => setProfileId(event.target.value)}
+                onValueChange={setProfileId}
+                options={[
+                  { value: '', label: '选择 Profile' },
+                  ...availableProfiles.map((profile) => ({
+                    value: profile.id,
+                    label: `${profile.displayName} · ${profile.engine}`,
+                  })),
+                ]}
+                placeholder="选择 Profile"
                 required
-              >
-                <option value="">选择 Profile</option>
-                {availableProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.displayName} · {profile.engine}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             {selectedProfile?.capabilitySnapshot && (
               <div className="notice small">
@@ -613,18 +1397,19 @@ function RunnersPage() {
             >
               <label>
                 Runner
-                <select
+                <AppSelect
                   value={profileRunnerId}
-                  onChange={(event) => setProfileRunnerId(event.target.value)}
+                  onValueChange={setProfileRunnerId}
+                  options={[
+                    { value: '', label: '选择 Runner' },
+                    ...runners.data.map((runner) => ({
+                      value: runner.id,
+                      label: runner.name,
+                    })),
+                  ]}
+                  placeholder="选择 Runner"
                   required
-                >
-                  <option value="">选择 Runner</option>
-                  {runners.data.map((runner) => (
-                    <option key={runner.id} value={runner.id}>
-                      {runner.name}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label>
                 显示名称
@@ -636,15 +1421,16 @@ function RunnersPage() {
               </label>
               <label>
                 Engine
-                <select
+                <AppSelect
                   value={profileEngine}
-                  onChange={(event) =>
-                    setProfileEngine(event.target.value as 'claude-code' | 'pi')
+                  onValueChange={(value) =>
+                    setProfileEngine(value as 'claude-code' | 'pi')
                   }
-                >
-                  <option value="pi">pi</option>
-                  <option value="claude-code">claude-code</option>
-                </select>
+                  options={[
+                    { value: 'pi', label: 'pi' },
+                    { value: 'claude-code', label: 'claude-code' },
+                  ]}
+                />
                 <span className="muted small">
                   Pi 使用本机 `pi --mode rpc`；Claude Code 使用 ACP。
                 </span>
@@ -953,6 +1739,9 @@ function RunPage() {
   });
   const stream = useAttemptStream(run.data);
   const [prompt, setPrompt] = useState('');
+  const [transcriptQuery, setTranscriptQuery] = useState('');
+  const [timelineQuery, setTimelineQuery] = useState('');
+  const [showThoughts, setShowThoughts] = useState(false);
   const action = useMutation({
     mutationFn: (input: {
       kind: 'prompt' | 'cancel' | 'close' | 'retry';
@@ -982,10 +1771,37 @@ function RunPage() {
   const turns = run.data.turns
     .filter((turn) => turn.attemptId === current.id)
     .sort((left, right) => left.number - right.number);
+  const timeline = buildTimeline(view.events, turns).filter((entry) => {
+    const query = timelineQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    if (entry.kind === 'turn')
+      return (
+        entry.turn.prompt.toLocaleLowerCase().includes(query) ||
+        entry.turn.status.includes(query)
+      );
+    return (
+      entry.event.type.includes(query) ||
+      JSON.stringify(entry.event.payload).toLocaleLowerCase().includes(query)
+    );
+  });
+  const transcriptChunks = filterTranscriptChunks(view.chunks, transcriptQuery);
+  const downloadTranscript = () => {
+    const blob = new Blob([transcriptToText(transcriptChunks)], {
+      type: 'text/plain;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `run-${run.data.run.id}-transcript.txt`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
   return (
     <div className="grid">
-      <Link className="muted" to={`/tasks/${run.data.run.taskId}`}>
-        ← 返回任务
+      <Link className="muted back-link" to={`/tasks/${run.data.run.taskId}`}>
+        <ArrowLeft size={14} strokeWidth={1.8} /> 返回任务
       </Link>
       <section className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -1042,8 +1858,60 @@ function RunPage() {
         </section>
       )}
       <section className="card">
-        <h3>转写</h3>
-        <Transcript chunks={view.chunks} />
+        <div className="run-section-heading">
+          <div>
+            <h3>Run timeline</h3>
+            <p className="muted small">{timeline.length} entries</p>
+          </div>
+          <label className="run-search">
+            <Search size={14} strokeWidth={1.8} />
+            <input
+              aria-label="Search timeline"
+              value={timelineQuery}
+              onChange={(event) => setTimelineQuery(event.target.value)}
+              placeholder="Search events…"
+            />
+          </label>
+        </div>
+        <Timeline entries={timeline} />
+      </section>
+      <section className="card">
+        <div className="run-section-heading">
+          <div>
+            <h3>转写</h3>
+            <p className="muted small">
+              {transcriptChunks.length} chunks ·{' '}
+              {countTranscriptFrames(transcriptChunks)} frames
+            </p>
+          </div>
+          <div className="run-tools">
+            <label className="run-search">
+              <Search size={14} strokeWidth={1.8} />
+              <input
+                aria-label="Search transcript"
+                value={transcriptQuery}
+                onChange={(event) => setTranscriptQuery(event.target.value)}
+                placeholder="Search transcript…"
+              />
+            </label>
+            <button
+              className="secondary compact-button"
+              disabled={transcriptChunks.length === 0}
+              onClick={downloadTranscript}
+              type="button"
+            >
+              <Download size={14} strokeWidth={1.8} /> 下载
+            </button>
+            <button
+              className="secondary compact-button"
+              onClick={() => setShowThoughts((value) => !value)}
+              type="button"
+            >
+              {showThoughts ? '隐藏思考' : '显示思考'}
+            </button>
+          </div>
+        </div>
+        <Transcript chunks={transcriptChunks} showThoughts={showThoughts} />
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -1114,37 +1982,69 @@ function RunPage() {
             .then(() => client.invalidateQueries({ queryKey: ['run', runId] }));
         }}
       />
-      <section className="card">
-        <h3>事件</h3>
-        <div className="list">
-          {view.events.map((event) => (
-            <div
-              className="list-item small"
-              key={`${event.attemptId}:${event.sequence}`}
-            >
-              <strong>{event.type}</strong>
-              <span className="muted">
-                {' '}
-                · #{event.sequence} ·{' '}
-                {new Date(event.occurredAt).toLocaleTimeString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }
 
-function Transcript({ chunks }: { chunks: TranscriptChunk[] }) {
+function Timeline({ entries }: { entries: TimelineEntry[] }) {
+  if (entries.length === 0)
+    return <div className="empty-state">No timeline entries match.</div>;
+  return (
+    <div className="timeline">
+      {entries.map((entry) => (
+        <div
+          className={`timeline-entry timeline-${entry.kind}`}
+          key={
+            entry.kind === 'turn'
+              ? `turn:${entry.turn.id}`
+              : `event:${entry.event.attemptId}:${entry.event.sequence}`
+          }
+        >
+          <span className="timeline-marker" />
+          <div className="timeline-content">
+            <div className="run-section-heading">
+              <strong>
+                {entry.kind === 'turn'
+                  ? `Turn #${entry.turn.number}`
+                  : entry.event.type}
+              </strong>
+              <time className="muted small">
+                {new Date(entry.at).toLocaleTimeString()}
+              </time>
+            </div>
+            {entry.kind === 'turn' ? (
+              <p className="small">{entry.turn.prompt}</p>
+            ) : (
+              <p className="muted small">
+                {JSON.stringify(entry.event.payload)}
+              </p>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Transcript({
+  chunks,
+  showThoughts,
+}: {
+  chunks: TranscriptChunk[];
+  showThoughts: boolean;
+}) {
   return (
     <div className="transcript">
       {chunks.length === 0 ? (
-        <span className="muted">等待 Agent 输出…</span>
+        <span className="muted">等待 Agent 输出或没有匹配内容…</span>
       ) : (
         chunks.flatMap((chunk) =>
           chunk.frames.map((frame, index) => (
-            <Frame key={`${chunk.chunkSeq}:${index}`} frame={frame} />
+            <Frame
+              key={`${chunk.chunkSeq}:${index}`}
+              frame={frame}
+              showThoughts={showThoughts}
+            />
           )),
         )
       )}
@@ -1152,11 +2052,22 @@ function Transcript({ chunks }: { chunks: TranscriptChunk[] }) {
   );
 }
 
-function Frame({ frame }: { frame: TranscriptChunk['frames'][number] }) {
+function Frame({
+  frame,
+  showThoughts,
+}: {
+  frame: TranscriptChunk['frames'][number];
+  showThoughts: boolean;
+}) {
   if (frame.t === 'text_delta')
     return <div className="frame">{frame.text}</div>;
   if (frame.t === 'thought_delta')
-    return <div className="frame thought">{frame.text}</div>;
+    return (
+      <details className="tool thought-tool" open={showThoughts}>
+        <summary>思考</summary>
+        <div className="frame thought">{frame.text}</div>
+      </details>
+    );
   if (frame.t === 'warning')
     return (
       <div className="frame warning">
@@ -1165,17 +2076,17 @@ function Frame({ frame }: { frame: TranscriptChunk['frames'][number] }) {
     );
   if (frame.t === 'tool_call')
     return (
-      <div className="tool">
-        <strong>{frame.tool}</strong>
+      <details className="tool" open={showThoughts}>
+        <summary>{frame.tool}</summary>
         <pre>{JSON.stringify(frame.input, null, 2)}</pre>
-      </div>
+      </details>
     );
   if (frame.t === 'tool_result')
     return (
-      <div className="tool">
-        <strong>tool result</strong>
+      <details className="tool">
+        <summary>tool result</summary>
         <pre>{frame.output}</pre>
-      </div>
+      </details>
     );
   if (frame.t === 'file_changed')
     return (
@@ -1185,10 +2096,10 @@ function Frame({ frame }: { frame: TranscriptChunk['frames'][number] }) {
     );
   if (frame.t === 'plan_updated')
     return (
-      <div className="tool">
-        <strong>计划</strong>
+      <details className="tool">
+        <summary>计划</summary>
         <pre>{JSON.stringify(frame.plan, null, 2)}</pre>
-      </div>
+      </details>
     );
   return (
     <div className="muted small">

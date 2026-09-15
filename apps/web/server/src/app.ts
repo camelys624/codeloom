@@ -174,7 +174,7 @@ function resolveConfig(input: Partial<ServerConfig> = {}): ServerConfig {
       process.env.PUBLIC_ORIGIN ??
       'http://localhost:5173',
     dataDir: input.dataDir ?? process.env.DATA_DIR ?? resolve('.data'),
-    host: input.host ?? process.env.HOST ?? '127.0.0.1',
+    host: input.host ?? process.env.HOST ?? '0.0.0.0',
     port: input.port ?? Number(process.env.PORT ?? 5181),
     serveStatic:
       input.serveStatic ?? envBoolean(process.env.SERVE_STATIC, false),
