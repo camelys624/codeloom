@@ -17,6 +17,7 @@ import {
   Check,
   ChevronDown,
   Command as CommandIcon,
+  Download,
   ExternalLink,
   GitBranch,
   LayoutGrid,
@@ -61,6 +62,12 @@ import {
 import { AppSelect } from './components/ui/select.js';
 import { api, ApiError, type RunSnapshot } from './lib/api.js';
 import { AttemptStream } from './lib/stream.js';
+import { buildTimeline, type TimelineEntry } from './lib/timeline.js';
+import {
+  countTranscriptFrames,
+  filterTranscriptChunks,
+  transcriptToText,
+} from './lib/transcript.js';
 import {
   canMoveTask,
   sortTasks,
@@ -1732,6 +1739,9 @@ function RunPage() {
   });
   const stream = useAttemptStream(run.data);
   const [prompt, setPrompt] = useState('');
+  const [transcriptQuery, setTranscriptQuery] = useState('');
+  const [timelineQuery, setTimelineQuery] = useState('');
+  const [showThoughts, setShowThoughts] = useState(false);
   const action = useMutation({
     mutationFn: (input: {
       kind: 'prompt' | 'cancel' | 'close' | 'retry';
@@ -1761,6 +1771,33 @@ function RunPage() {
   const turns = run.data.turns
     .filter((turn) => turn.attemptId === current.id)
     .sort((left, right) => left.number - right.number);
+  const timeline = buildTimeline(view.events, turns).filter((entry) => {
+    const query = timelineQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    if (entry.kind === 'turn')
+      return (
+        entry.turn.prompt.toLocaleLowerCase().includes(query) ||
+        entry.turn.status.includes(query)
+      );
+    return (
+      entry.event.type.includes(query) ||
+      JSON.stringify(entry.event.payload).toLocaleLowerCase().includes(query)
+    );
+  });
+  const transcriptChunks = filterTranscriptChunks(view.chunks, transcriptQuery);
+  const downloadTranscript = () => {
+    const blob = new Blob([transcriptToText(transcriptChunks)], {
+      type: 'text/plain;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `run-${run.data.run.id}-transcript.txt`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
   return (
     <div className="grid">
       <Link className="muted back-link" to={`/tasks/${run.data.run.taskId}`}>
@@ -1821,8 +1858,60 @@ function RunPage() {
         </section>
       )}
       <section className="card">
-        <h3>转写</h3>
-        <Transcript chunks={view.chunks} />
+        <div className="run-section-heading">
+          <div>
+            <h3>Run timeline</h3>
+            <p className="muted small">{timeline.length} entries</p>
+          </div>
+          <label className="run-search">
+            <Search size={14} strokeWidth={1.8} />
+            <input
+              aria-label="Search timeline"
+              value={timelineQuery}
+              onChange={(event) => setTimelineQuery(event.target.value)}
+              placeholder="Search events…"
+            />
+          </label>
+        </div>
+        <Timeline entries={timeline} />
+      </section>
+      <section className="card">
+        <div className="run-section-heading">
+          <div>
+            <h3>转写</h3>
+            <p className="muted small">
+              {transcriptChunks.length} chunks ·{' '}
+              {countTranscriptFrames(transcriptChunks)} frames
+            </p>
+          </div>
+          <div className="run-tools">
+            <label className="run-search">
+              <Search size={14} strokeWidth={1.8} />
+              <input
+                aria-label="Search transcript"
+                value={transcriptQuery}
+                onChange={(event) => setTranscriptQuery(event.target.value)}
+                placeholder="Search transcript…"
+              />
+            </label>
+            <button
+              className="secondary compact-button"
+              disabled={transcriptChunks.length === 0}
+              onClick={downloadTranscript}
+              type="button"
+            >
+              <Download size={14} strokeWidth={1.8} /> 下载
+            </button>
+            <button
+              className="secondary compact-button"
+              onClick={() => setShowThoughts((value) => !value)}
+              type="button"
+            >
+              {showThoughts ? '隐藏思考' : '显示思考'}
+            </button>
+          </div>
+        </div>
+        <Transcript chunks={transcriptChunks} showThoughts={showThoughts} />
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -1893,37 +1982,69 @@ function RunPage() {
             .then(() => client.invalidateQueries({ queryKey: ['run', runId] }));
         }}
       />
-      <section className="card">
-        <h3>事件</h3>
-        <div className="list">
-          {view.events.map((event) => (
-            <div
-              className="list-item small"
-              key={`${event.attemptId}:${event.sequence}`}
-            >
-              <strong>{event.type}</strong>
-              <span className="muted">
-                {' '}
-                · #{event.sequence} ·{' '}
-                {new Date(event.occurredAt).toLocaleTimeString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }
 
-function Transcript({ chunks }: { chunks: TranscriptChunk[] }) {
+function Timeline({ entries }: { entries: TimelineEntry[] }) {
+  if (entries.length === 0)
+    return <div className="empty-state">No timeline entries match.</div>;
+  return (
+    <div className="timeline">
+      {entries.map((entry) => (
+        <div
+          className={`timeline-entry timeline-${entry.kind}`}
+          key={
+            entry.kind === 'turn'
+              ? `turn:${entry.turn.id}`
+              : `event:${entry.event.attemptId}:${entry.event.sequence}`
+          }
+        >
+          <span className="timeline-marker" />
+          <div className="timeline-content">
+            <div className="run-section-heading">
+              <strong>
+                {entry.kind === 'turn'
+                  ? `Turn #${entry.turn.number}`
+                  : entry.event.type}
+              </strong>
+              <time className="muted small">
+                {new Date(entry.at).toLocaleTimeString()}
+              </time>
+            </div>
+            {entry.kind === 'turn' ? (
+              <p className="small">{entry.turn.prompt}</p>
+            ) : (
+              <p className="muted small">
+                {JSON.stringify(entry.event.payload)}
+              </p>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Transcript({
+  chunks,
+  showThoughts,
+}: {
+  chunks: TranscriptChunk[];
+  showThoughts: boolean;
+}) {
   return (
     <div className="transcript">
       {chunks.length === 0 ? (
-        <span className="muted">等待 Agent 输出…</span>
+        <span className="muted">等待 Agent 输出或没有匹配内容…</span>
       ) : (
         chunks.flatMap((chunk) =>
           chunk.frames.map((frame, index) => (
-            <Frame key={`${chunk.chunkSeq}:${index}`} frame={frame} />
+            <Frame
+              key={`${chunk.chunkSeq}:${index}`}
+              frame={frame}
+              showThoughts={showThoughts}
+            />
           )),
         )
       )}
@@ -1931,11 +2052,22 @@ function Transcript({ chunks }: { chunks: TranscriptChunk[] }) {
   );
 }
 
-function Frame({ frame }: { frame: TranscriptChunk['frames'][number] }) {
+function Frame({
+  frame,
+  showThoughts,
+}: {
+  frame: TranscriptChunk['frames'][number];
+  showThoughts: boolean;
+}) {
   if (frame.t === 'text_delta')
     return <div className="frame">{frame.text}</div>;
   if (frame.t === 'thought_delta')
-    return <div className="frame thought">{frame.text}</div>;
+    return (
+      <details className="tool thought-tool" open={showThoughts}>
+        <summary>思考</summary>
+        <div className="frame thought">{frame.text}</div>
+      </details>
+    );
   if (frame.t === 'warning')
     return (
       <div className="frame warning">
@@ -1944,17 +2076,17 @@ function Frame({ frame }: { frame: TranscriptChunk['frames'][number] }) {
     );
   if (frame.t === 'tool_call')
     return (
-      <div className="tool">
-        <strong>{frame.tool}</strong>
+      <details className="tool" open={showThoughts}>
+        <summary>{frame.tool}</summary>
         <pre>{JSON.stringify(frame.input, null, 2)}</pre>
-      </div>
+      </details>
     );
   if (frame.t === 'tool_result')
     return (
-      <div className="tool">
-        <strong>tool result</strong>
+      <details className="tool">
+        <summary>tool result</summary>
         <pre>{frame.output}</pre>
-      </div>
+      </details>
     );
   if (frame.t === 'file_changed')
     return (
@@ -1964,10 +2096,10 @@ function Frame({ frame }: { frame: TranscriptChunk['frames'][number] }) {
     );
   if (frame.t === 'plan_updated')
     return (
-      <div className="tool">
-        <strong>计划</strong>
+      <details className="tool">
+        <summary>计划</summary>
         <pre>{JSON.stringify(frame.plan, null, 2)}</pre>
-      </div>
+      </details>
     );
   return (
     <div className="muted small">

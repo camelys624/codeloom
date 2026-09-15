@@ -1,11 +1,11 @@
 # 实现状态与交接
 
 - 日期：2026-09-15
-- 对应文档：0.6 加 ADR-027；阶段 2 首个 UI slice 及看板交互增强
+- 对应文档：0.6 加 ADR-027；阶段 2 Run 体验增强
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 首个 UI slice 已落地到独立分支：Circle 借鉴的应用壳、可折叠 Sidebar、主题切换、Command Palette、Task 看板、筛选 chips、优先级、拖拽状态迁移和用户可用的状态迁移入口。服务端仍是 PostgreSQL 唯一事实，所有 Task 状态更新继续通过已有 revision 乐观并发接口。
+阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 已完成应用壳、Task 看板拖拽和 Run 时间线/转写工具。服务端仍是 PostgreSQL 唯一事实，浏览器通过已有 Run 快照、事件和 transcript 游标获取数据。
 
 ## 2. 已完成
 
@@ -72,13 +72,13 @@
 
 0.6 全套加 ADR-027（多引擎接口面与接入顺序）。2026-09-13 新增 Pi 基础真实调用、Runner 终态/重连控制、客户端流恢复和自动重试收口记录。`data-and-events.md` 与 `runner-agent-protocol.md` 记录创建 Run 时由 Runner 解析本地 `baseRef`、冻结 `baseCommitSha` 以及 ref 解析失败语义。`check:contracts` 保证 domain-model.md 与 runner-agent-protocol.md 里的 ts 类型块与代码一致，改类型必须同时改文档。
 
-### 2.9 阶段 2 首个 UI slice
-
 - `apps/web/client/src/main.tsx`：Circle-inspired 应用壳、可折叠 Sidebar、顶部搜索入口、Command Palette（`⌘K` / `Ctrl-K`）、主题切换和 Task board/list 视图。
 - `apps/web/client/src/lib/tasks.ts`：Task 状态列、优先级标签、过滤、排序和用户状态迁移规则；状态迁移复用 `packages/contracts` 的服务端状态机。
 - Task 看板：按 backlog、todo、in_progress、needs_review、done、canceled 分列；支持标题/描述搜索、优先级 chips、优先级创建、原生拖拽状态迁移和下拉状态更新；合法迁移由客户端提前阻止，实际更新使用现有 revision 乐观并发接口。
-- `apps/web/client/test/task-board.test.ts`：过滤、优先级排序不修改 Query 结果、合法/非法状态迁移的行为回归。
-- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bun run test`（11 个测试文件，32 个测试）、`bunx vitest run apps/web/client/test/task-board.test.ts`（3 tests）、`bun run format:check` 和 `git diff --check` 已通过。生产构建的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置，不影响构建成功。
+- `apps/web/client/src/lib/timeline.ts`：合并 Attempt 事件与 Turn 的时间线，去除重复 Turn 生命周期事件，支持按文本过滤。
+- `apps/web/client/src/lib/transcript.ts`：按 frame 搜索、frame 统计和纯文本下载格式化；Run 页支持转写搜索、下载、思考段折叠和工具/计划折叠。
+- Run 页新增时间线、转写搜索和下载工具；事件与转写仍复用现有 `AttemptStream` 游标和重连补拉链路。
+- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bun run test`（13 个测试文件，35 个测试）、focused timeline/transcript tests、`bun run format:check` 和 `git diff --check` 已通过。生产构建的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置，不影响构建成功。
 
 ## 3. 未完成
 
