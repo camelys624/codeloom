@@ -1066,6 +1066,110 @@ button:disabled {
   border-radius: 8px;
   padding: 10px;
 }
+.diff-tree {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+.diff-file {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.diff-file > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+.diff-file > summary::-webkit-details-marker {
+  display: none;
+}
+.diff-file-path {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-file-status {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.diff-stat-add {
+  color: #15803d;
+}
+.diff-stat-del {
+  color: #b91c1c;
+}
+.diff-limit {
+  margin: 0;
+  padding: 12px;
+}
+.diff-hunks {
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  background: #0f172a;
+  color: #e2e8f0;
+  font:
+    12px/1.55 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.diff-hunk + .diff-hunk {
+  border-top: 1px solid #334155;
+}
+.diff-hunk-header {
+  padding: 5px 10px;
+  background: #1e293b;
+  color: #93c5fd;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 50px 50px minmax(max-content, 1fr);
+  min-width: max-content;
+}
+.diff-line-number {
+  padding: 0 7px;
+  border-right: 1px solid #1e293b;
+  color: #64748b;
+  text-align: right;
+  user-select: none;
+}
+.diff-line code {
+  padding: 0 10px;
+  white-space: pre;
+}
+.diff-line-addition {
+  background: rgb(22 163 74 / 17%);
+}
+.diff-line-deletion {
+  background: rgb(220 38 38 / 17%);
+}
+.diff-line-meta {
+  color: #fbbf24;
+}
+.diff-token-keyword {
+  color: #c4b5fd;
+}
+.diff-token-string {
+  color: #86efac;
+}
+.diff-token-number {
+  color: #f9a8d4;
+}
+.diff-token-comment {
+  color: #94a3b8;
+}
+.diff-token-operator {
+  color: #67e8f9;
+}
 pre {
   white-space: pre-wrap;
   word-break: break-word;

@@ -123,6 +123,21 @@ export const RunSnapshotSchema = z.strictObject({
     .max(10000),
 });
 export type RunSnapshot = z.infer<typeof RunSnapshotSchema>;
+export const RunDiffOutputSchema = z.strictObject({
+  patch: TextSchema,
+  sizeBytes: CountSchema,
+  truncated: z.boolean(),
+  turns: z
+    .array(
+      z.strictObject({
+        turnId: IdSchema,
+        number: SequenceSchema,
+        patchArtifactId: IdSchema.optional(),
+      }),
+    )
+    .max(100000),
+});
+export type RunDiffOutput = z.infer<typeof RunDiffOutputSchema>;
 export const EventsOutputSchema = z.strictObject({
   events: z.array(RunEventSchema).max(10000),
 });

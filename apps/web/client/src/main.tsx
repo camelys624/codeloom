@@ -60,8 +60,19 @@ import {
   type TranscriptChunk,
 } from '@agent-workspace/contracts';
 import { AppSelect } from './components/ui/select.js';
-import { api, ApiError, type RunSnapshot } from './lib/api.js';
+import {
+  api,
+  ApiError,
+  type RunDiffOutput,
+  type RunSnapshot,
+} from './lib/api.js';
 import { AttemptStream } from './lib/stream.js';
+import {
+  highlightDiffLine,
+  parseUnifiedDiff,
+  type DiffFile,
+  type DiffLine,
+} from './lib/diff.js';
 import { buildTimeline, type TimelineEntry } from './lib/timeline.js';
 import {
   countTranscriptFrames,
@@ -1564,7 +1575,9 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
   const streams = useRef(new Map<string, AttemptStream>());
   const client = useQueryClient();
   const [, redraw] = useState(0);
-  const attemptIds = snapshot?.attempts.map((attempt) => attempt.id).join(',');
+  const attemptIds = snapshot?.attempts
+    .map((attempt: RunSnapshot['attempts'][number]) => attempt.id)
+    .join(',');
   const runId = snapshot?.run.id;
   useEffect(() => {
     if (!snapshot || !runId) return;
@@ -1731,6 +1744,12 @@ function useAttemptStream(snapshot: RunSnapshot | undefined) {
 function RunPage() {
   const { runId } = useParams();
   const client = useQueryClient();
+  const cumulativeDiff = useQuery({
+    queryKey: ['run-diff', runId],
+    queryFn: () => api.runDiff(runId ?? ''),
+    enabled: Boolean(runId),
+    staleTime: 5_000,
+  });
   const run = useQuery({
     queryKey: ['run', runId],
     queryFn: () => api.run(runId ?? ''),
@@ -1974,6 +1993,11 @@ function RunPage() {
           </div>
         )}
       </section>
+      <CumulativeDiff
+        diff={cumulativeDiff.data}
+        isLoading={cumulativeDiff.isPending}
+        error={cumulativeDiff.error}
+      />
       <Approvals
         approvals={run.data.approvals}
         onResolve={(approval, decision) => {
@@ -1982,6 +2006,112 @@ function RunPage() {
             .then(() => client.invalidateQueries({ queryKey: ['run', runId] }));
         }}
       />
+    </div>
+  );
+}
+
+function CumulativeDiff({
+  diff,
+  isLoading,
+  error,
+}: {
+  diff: RunDiffOutput | undefined;
+  isLoading: boolean;
+  error: unknown;
+}) {
+  const parsed = diff ? parseUnifiedDiff(diff.patch) : undefined;
+  return (
+    <section className="card">
+      <div className="run-section-heading">
+        <div>
+          <h3>整 Run 累积 Diff</h3>
+          <p className="muted small">
+            {parsed
+              ? `${parsed.files.length} files · +${parsed.additions}/-${parsed.deletions}`
+              : isLoading
+                ? '加载中…'
+                : '还没有累计 patch'}
+          </p>
+        </div>
+        {diff?.truncated && <span className="badge">已截断（超过 2 MB）</span>}
+      </div>
+      {error ? (
+        <ErrorNotice error={error} />
+      ) : parsed && parsed.files.length > 0 ? (
+        <DiffTree files={parsed.files} />
+      ) : (
+        <p className="muted">Run 完成 Turn 后会在这里显示累计 Diff。</p>
+      )}
+    </section>
+  );
+}
+
+function DiffTree({ files }: { files: DiffFile[] }) {
+  return (
+    <div className="diff-tree">
+      {files.map((file) => (
+        <DiffFileView file={file} key={`${file.path}:${file.status}`} />
+      ))}
+    </div>
+  );
+}
+
+function DiffFileView({ file }: { file: DiffFile }) {
+  const [open, setOpen] = useState(false);
+  const tooLarge = file.lineCount > 5000;
+  return (
+    <details
+      className="diff-file"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span className="diff-file-path">{file.path}</span>
+        <span className="diff-file-status">{file.status}</span>
+        <span className="diff-stat-add">+{file.additions}</span>
+        <span className="diff-stat-del">-{file.deletions}</span>
+      </summary>
+      {tooLarge ? (
+        <p className="muted small diff-limit">
+          文件超过 5000 行，仅显示统计；请下载对应 Turn patch 查看完整内容。
+        </p>
+      ) : file.status === 'binary' ? (
+        <p className="muted small diff-limit">二进制文件不提供行级预览。</p>
+      ) : (
+        <div className="diff-hunks">
+          {file.hunks.map((hunk) => (
+            <div className="diff-hunk" key={hunk.header}>
+              <div className="diff-hunk-header">{hunk.header}</div>
+              {hunk.lines.map((line, index) => (
+                <DiffLineView
+                  file={file}
+                  line={line}
+                  key={`${hunk.header}:${index}`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function DiffLineView({ file, line }: { file: DiffFile; line: DiffLine }) {
+  return (
+    <div className={`diff-line diff-line-${line.kind}`}>
+      <span className="diff-line-number">{line.oldLine ?? ''}</span>
+      <span className="diff-line-number">{line.newLine ?? ''}</span>
+      <code>
+        {highlightDiffLine(line.text, file.path).map((token, index) => (
+          <span
+            className={`diff-token-${token.kind}`}
+            key={`${index}:${token.text}`}
+          >
+            {token.text}
+          </span>
+        ))}
+      </code>
     </div>
   );
 }
