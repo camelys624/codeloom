@@ -9,6 +9,10 @@
 - Keep the primary checkout available for integration work; do not reuse it as the feature worktree.
 - Report the branch name, worktree path, and resulting commit when delivering the change.
 
+## UI component library
+
+- **REQUIRED:** Prefer components from the shadcn/ui library for UI work.
+- If shadcn/ui does not provide a suitable component, implement a custom component and document why the shadcn/ui component was not used.
 ## LAN development access
 
 - The Vite frontend dev server MUST bind to `0.0.0.0`, not loopback-only, so another device on the local network can open the UI.
