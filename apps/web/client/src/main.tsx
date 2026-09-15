@@ -1,5 +1,5 @@
-import { StrictMode, useEffect, useRef, useState } from 'react';
-import type { ReactElement, ReactNode } from 'react';
+import { StrictMode, forwardRef, useEffect, useRef, useState } from 'react';
+import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import * as ToggleGroup from '@radix-ui/react-toggle-group';
@@ -74,31 +74,28 @@ const queryClient = new QueryClient({
   },
 });
 
-function IconButton({
-  label,
-  children,
-  className = '',
-  onClick,
-  disabled = false,
-}: {
-  label: string;
-  children: ReactElement;
-  className?: string;
-  onClick?: () => void;
-  disabled?: boolean;
-}) {
+const IconButton = forwardRef<
+  HTMLButtonElement,
+  Omit<ComponentPropsWithoutRef<'button'>, 'children' | 'aria-label'> & {
+    label: string;
+    children: ReactElement;
+  }
+>(function IconButton(
+  { label, children, className = '', type = 'button', ...props },
+  ref,
+) {
   return (
     <button
+      ref={ref}
       className={`icon-button${className ? ` ${className}` : ''}`}
       aria-label={label}
-      onClick={onClick}
-      disabled={disabled}
-      type="button"
+      type={type}
+      {...props}
     >
       {children}
     </button>
   );
-}
+});
 
 function AppTooltip({
   label,
