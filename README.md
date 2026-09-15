@@ -66,6 +66,8 @@ SPIKE_MODEL=opus bun run spike:acp
 
 `DATABASE_URL` 指向现有 PostgreSQL 时，数据库测试使用独立随机 schema，不改业务数据；未设置时使用 Testcontainers 启动 PostgreSQL 16，需要 Docker。`.env` 与凭据不得提交。
 
+开发时 Vite 默认绑定 `0.0.0.0`，局域网设备使用运行主机的 LAN 地址访问 `http://<lan-ip>:5173/`。若从其他设备访问，Fastify 的 `HOST` 必须绑定可达地址，`PUBLIC_ORIGIN` 必须设置为浏览器实际使用的 origin；同源 Vite proxy 会转发 `/api/*` 和 `/ws/client`。
+
 门禁在系统临时目录建立独立 git 仓库，不修改项目 checkout；验证连续 10 轮上下文、批准前无工具副作用、真实权限往返、取消和子进程清理。普通 `test` 中的确定性 ACP wire peer 仅用于回归，不能代替此门禁。
 
 ## 仓库布局（目标）

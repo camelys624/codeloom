@@ -189,7 +189,7 @@ session cookie 是 HttpOnly，前端读不到。应用启动先请求 `GET /api/
 
 ```text
 Fastify API/WS       :5181
-Vite client          :5173
+Vite client          :5173（绑定 0.0.0.0，可从局域网访问）
 PostgreSQL           :5432
 ```
 
@@ -200,7 +200,9 @@ Vite 代理以下路径到 Fastify（WebSocket 代理开 `ws: true`）：
 /ws/client
 ```
 
-Runner 直接连接 `http://localhost:5181`，不连接 Vite。浏览器只连接 Vite 提供的同源前端地址。开发环境 Fastify 不托管静态文件。
+Vite 开发服务器必须监听 `0.0.0.0`。同一局域网的其他设备使用运行主机的 LAN 地址访问，例如 `http://192.168.1.20:5173/`，不能只记录 `localhost`。Fastify 也必须绑定可达地址，并将 `PUBLIC_ORIGIN` 设置为浏览器实际打开的 origin；否则认证的 Origin/CSRF 校验和 WebSocket 代理会失败。
+
+Runner 直接连接 Fastify API，不连接 Vite。浏览器只连接 Vite 提供的同源前端地址。开发环境 Fastify 不托管静态文件。
 
 ### 生产构建与托管
 
