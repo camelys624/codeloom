@@ -1,5 +1,8 @@
 import { StrictMode, useEffect, useRef, useState } from 'react';
+import type { MouseEvent, PointerEvent } from 'react';
 import { createRoot } from 'react-dom/client';
+import * as Select from '@radix-ui/react-select';
+import { Check, ChevronDown } from 'lucide-react';
 import {
   Link,
   NavLink,
@@ -47,6 +50,91 @@ const queryClient = new QueryClient({
   },
 });
 
+const EMPTY_SELECT_VALUE = '__codeloom_empty__';
+
+function AppSelect({
+  value,
+  onValueChange,
+  options,
+  placeholder,
+  ariaLabel,
+  disabled = false,
+  required = false,
+  stopPropagation = false,
+  className,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  options: readonly { value: string; label: string }[];
+  placeholder?: string;
+  ariaLabel?: string;
+  disabled?: boolean;
+  required?: boolean;
+  stopPropagation?: boolean;
+  className?: string;
+}) {
+  const normalizedOptions = options.map((option) => ({
+    ...option,
+    value: option.value || EMPTY_SELECT_VALUE,
+  }));
+  const stopTriggerPropagation = (event: MouseEvent<HTMLButtonElement>) => {
+    if (stopPropagation) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+  const stopTriggerPointerPropagation = (
+    event: PointerEvent<HTMLButtonElement>,
+  ) => {
+    if (stopPropagation) event.stopPropagation();
+  };
+  return (
+    <Select.Root
+      value={value || undefined}
+      onValueChange={(nextValue) =>
+        onValueChange(nextValue === EMPTY_SELECT_VALUE ? '' : nextValue)
+      }
+      disabled={disabled}
+      required={required}
+    >
+      <Select.Trigger
+        className={`select-trigger${className ? ` ${className}` : ''}`}
+        aria-label={ariaLabel}
+        onClick={stopPropagation ? stopTriggerPropagation : undefined}
+        onPointerDown={
+          stopPropagation ? stopTriggerPointerPropagation : undefined
+        }
+      >
+        <Select.Value className="select-value" placeholder={placeholder} />
+        <Select.Icon className="select-icon">
+          <ChevronDown size={16} strokeWidth={1.8} />
+        </Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content
+          className="select-content"
+          position="popper"
+          sideOffset={4}
+        >
+          <Select.Viewport className="select-viewport">
+            {normalizedOptions.map((option) => (
+              <Select.Item
+                className="select-item"
+                key={option.value}
+                value={option.value}
+              >
+                <Select.ItemText>{option.label}</Select.ItemText>
+                <Select.ItemIndicator className="select-item-indicator">
+                  <Check size={15} strokeWidth={2} />
+                </Select.ItemIndicator>
+              </Select.Item>
+            ))}
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
 function ErrorNotice({ error }: { error: unknown }) {
   const message = error instanceof Error ? error.message : '请求失败';
   return <div className="notice">{message}</div>;
@@ -555,21 +643,17 @@ function TaskCard({
         <span className="task-assignee">R</span>
         <span className="task-revision">↻ {task.revision}</span>
         {onMove && (
-          <select
-            aria-label="Change task status"
+          <AppSelect
             value={task.status}
-            onClick={(event) => event.preventDefault()}
-            onChange={(event) => {
-              event.preventDefault();
-              onMove(task, event.target.value as TaskStatus);
-            }}
-          >
-            {TASK_COLUMNS.map((status) => (
-              <option key={status} value={status}>
-                {TASK_STATUS_LABELS[status]}
-              </option>
-            ))}
-          </select>
+            onValueChange={(value) => onMove(task, value as TaskStatus)}
+            options={TASK_COLUMNS.map((status) => ({
+              value: status,
+              label: TASK_STATUS_LABELS[status],
+            }))}
+            ariaLabel="Change task status"
+            className="task-status-select"
+            stopPropagation
+          />
         )}
       </div>
     </Link>
@@ -650,33 +734,35 @@ function CreateTaskDialog({
           <div className="grid two">
             <label>
               Priority
-              <select
+              <AppSelect
                 value={priority}
-                onChange={(event) =>
-                  onPriority(event.target.value as TaskPriority | '')
+                onValueChange={(value) =>
+                  onPriority(value as TaskPriority | '')
                 }
-              >
-                <option value="">No priority</option>
-                {TASK_PRIORITIES.map((value) => (
-                  <option value={value} key={value}>
-                    {TASK_PRIORITY_LABELS[value]}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: 'No priority' },
+                  ...TASK_PRIORITIES.map((value) => ({
+                    value,
+                    label: TASK_PRIORITY_LABELS[value],
+                  })),
+                ]}
+                placeholder="No priority"
+              />
             </label>
             <label>
               Repository
-              <select
+              <AppSelect
                 value={repositoryId}
-                onChange={(event) => onRepository(event.target.value)}
-              >
-                <option value="">Not linked</option>
-                {repositories.map((repository) => (
-                  <option key={repository.id} value={repository.id}>
-                    {repository.name}
-                  </option>
-                ))}
-              </select>
+                onValueChange={onRepository}
+                options={[
+                  { value: '', label: 'Not linked' },
+                  ...repositories.map((repository) => ({
+                    value: repository.id,
+                    label: repository.name,
+                  })),
+                ]}
+                placeholder="Not linked"
+              />
             </label>
           </div>
           {error instanceof Error && <ErrorNotice error={error} />}
@@ -834,20 +920,19 @@ function TaskPage() {
         <h3>Repository</h3>
         <label>
           绑定代码库
-          <select
+          <AppSelect
             value={task.repositoryId ?? ''}
             disabled={bindRepository.isPending}
-            onChange={(event) =>
-              bindRepository.mutate(event.target.value || null)
-            }
-          >
-            <option value="">不绑定</option>
-            {repositories.data.map((repository) => (
-              <option key={repository.id} value={repository.id}>
-                {repository.name} ({repository.defaultRef})
-              </option>
-            ))}
-          </select>
+            onValueChange={(value) => bindRepository.mutate(value || null)}
+            options={[
+              { value: '', label: '不绑定' },
+              ...repositories.data.map((repository) => ({
+                value: repository.id,
+                label: `${repository.name} (${repository.defaultRef})`,
+              })),
+            ]}
+            placeholder="不绑定"
+          />
         </label>
         {bindRepository.error && <ErrorNotice error={bindRepository.error} />}
       </section>
@@ -862,36 +947,38 @@ function TaskPage() {
           >
             <label>
               Runner
-              <select
+              <AppSelect
                 value={runnerId}
-                onChange={(event) => {
-                  setRunnerId(event.target.value);
+                onValueChange={(value) => {
+                  setRunnerId(value);
                   setProfileId('');
                 }}
+                options={[
+                  { value: '', label: '选择 Runner' },
+                  ...runners.data.map((runner) => ({
+                    value: runner.id,
+                    label: `${runner.name} (${runner.status})`,
+                  })),
+                ]}
+                placeholder="选择 Runner"
                 required
-              >
-                <option value="">选择 Runner</option>
-                {runners.data.map((runner) => (
-                  <option key={runner.id} value={runner.id}>
-                    {runner.name} ({runner.status})
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             <label>
               Agent Profile
-              <select
+              <AppSelect
                 value={profileId}
-                onChange={(event) => setProfileId(event.target.value)}
+                onValueChange={setProfileId}
+                options={[
+                  { value: '', label: '选择 Profile' },
+                  ...availableProfiles.map((profile) => ({
+                    value: profile.id,
+                    label: `${profile.displayName} · ${profile.engine}`,
+                  })),
+                ]}
+                placeholder="选择 Profile"
                 required
-              >
-                <option value="">选择 Profile</option>
-                {availableProfiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.displayName} · {profile.engine}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             {selectedProfile?.capabilitySnapshot && (
               <div className="notice small">
@@ -1048,18 +1135,19 @@ function RunnersPage() {
             >
               <label>
                 Runner
-                <select
+                <AppSelect
                   value={profileRunnerId}
-                  onChange={(event) => setProfileRunnerId(event.target.value)}
+                  onValueChange={setProfileRunnerId}
+                  options={[
+                    { value: '', label: '选择 Runner' },
+                    ...runners.data.map((runner) => ({
+                      value: runner.id,
+                      label: runner.name,
+                    })),
+                  ]}
+                  placeholder="选择 Runner"
                   required
-                >
-                  <option value="">选择 Runner</option>
-                  {runners.data.map((runner) => (
-                    <option key={runner.id} value={runner.id}>
-                      {runner.name}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               <label>
                 显示名称
@@ -1071,15 +1159,16 @@ function RunnersPage() {
               </label>
               <label>
                 Engine
-                <select
+                <AppSelect
                   value={profileEngine}
-                  onChange={(event) =>
-                    setProfileEngine(event.target.value as 'claude-code' | 'pi')
+                  onValueChange={(value) =>
+                    setProfileEngine(value as 'claude-code' | 'pi')
                   }
-                >
-                  <option value="pi">pi</option>
-                  <option value="claude-code">claude-code</option>
-                </select>
+                  options={[
+                    { value: 'pi', label: 'pi' },
+                    { value: 'claude-code', label: 'claude-code' },
+                  ]}
+                />
                 <span className="muted small">
                   Pi 使用本机 `pi --mode rpc`；Claude Code 使用 ACP。
                 </span>

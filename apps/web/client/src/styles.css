@@ -527,12 +527,21 @@ kbd {
   color: var(--muted);
   font-size: 10px;
 }
-.task-card-footer select {
+.task-card-footer .task-status-select {
+  width: auto;
+  min-width: 22px;
+  max-width: none;
   margin-left: auto;
-  max-width: 19px;
-  padding: 0;
+  padding: 0 2px;
   border: 0;
   background: transparent;
+}
+.task-card-footer .task-status-select .select-value {
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+.task-card-footer .task-status-select .select-icon {
   color: var(--muted);
 }
 .empty-column {
@@ -690,13 +699,85 @@ kbd {
 }
 input,
 textarea,
-select {
+.select-trigger {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 9px 10px;
   background: var(--surface);
   color: var(--text);
+}
+.select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  outline: none;
+  text-align: left;
+}
+.select-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.select-trigger:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.select-value {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-value[data-placeholder] {
+  color: var(--muted);
+}
+.select-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.select-content {
+  z-index: 30;
+  overflow: hidden;
+  min-width: var(--radix-select-trigger-width);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  box-shadow: 0 16px 38px rgb(15 23 42 / 18%);
+}
+.select-viewport {
+  padding: 5px;
+}
+.select-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 30px 7px 10px;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  outline: none;
+  user-select: none;
+}
+.select-item[data-highlighted] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.select-item[data-disabled] {
+  pointer-events: none;
+  opacity: 0.45;
+}
+.select-item-indicator {
+  position: absolute;
+  right: 9px;
+  display: inline-flex;
 }
 textarea {
   min-height: 100px;
