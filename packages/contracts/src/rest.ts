@@ -26,13 +26,14 @@ import {
   CountSchema,
   CursorSchema,
   IdSchema,
+  MAX_RUN_DIFF_BYTES,
   NameSchema,
   SequenceSchema,
   Sha256Schema,
   TextSchema,
   TimestampSchema,
+  utf8ByteLength,
 } from './validation.js';
-
 export const PairRunnerInputSchema = z.strictObject({
   pairingCode: NameSchema,
   name: NameSchema,
@@ -123,20 +124,27 @@ export const RunSnapshotSchema = z.strictObject({
     .max(10000),
 });
 export type RunSnapshot = z.infer<typeof RunSnapshotSchema>;
-export const RunDiffOutputSchema = z.strictObject({
-  patch: TextSchema,
-  sizeBytes: CountSchema,
-  truncated: z.boolean(),
-  turns: z
-    .array(
-      z.strictObject({
-        turnId: IdSchema,
-        number: SequenceSchema,
-        patchArtifactId: IdSchema.optional(),
-      }),
-    )
-    .max(100000),
-});
+export const RunDiffOutputSchema = z
+  .strictObject({
+    patch: TextSchema,
+    sizeBytes: CountSchema,
+    truncated: z.boolean(),
+    turns: z
+      .array(
+        z.strictObject({
+          turnId: IdSchema,
+          number: SequenceSchema,
+          patchArtifactId: IdSchema.optional(),
+        }),
+      )
+      .max(100000),
+  })
+  .refine(
+    (value) =>
+      value.sizeBytes === utf8ByteLength(value.patch) &&
+      value.sizeBytes <= MAX_RUN_DIFF_BYTES,
+    'Run diff sizeBytes must match patch bytes and stay within the response limit',
+  );
 export type RunDiffOutput = z.infer<typeof RunDiffOutputSchema>;
 export const EventsOutputSchema = z.strictObject({
   events: z.array(RunEventSchema).max(10000),

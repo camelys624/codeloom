@@ -1659,10 +1659,11 @@ export async function buildApp(
       }
       const bytes = Buffer.byteLength(patch);
       if (bytes > remaining) {
-        patches.push(
-          Buffer.from(patch).subarray(0, remaining).toString('utf8'),
-        );
-        sizeBytes = maxBytes;
+        const prefix = Buffer.from(patch)
+          .subarray(0, remaining)
+          .toString('utf8');
+        patches.push(prefix);
+        sizeBytes += Buffer.byteLength(prefix);
         truncated = true;
         break;
       }

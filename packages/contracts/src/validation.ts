@@ -8,6 +8,7 @@ export const MAX_JSON_DEPTH = 32;
 export const MAX_JSON_NODES = 16384;
 export const MAX_PATCH_BYTES = 20 * 1024 * 1024;
 export const MAX_LOG_BYTES = 50 * 1024 * 1024;
+export const MAX_RUN_DIFF_BYTES = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 
 export type JsonValue =

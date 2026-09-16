@@ -194,7 +194,7 @@ describe('run diff response', () => {
     expect(
       RunDiffOutputSchema.parse({
         patch: 'diff --git a/src/a.ts b/src/a.ts\n',
-        sizeBytes: 34,
+        sizeBytes: 33,
         truncated: false,
         turns: [{ turnId: 'trn_one', number: 1, patchArtifactId: 'art_one' }],
       }).turns[0]?.number,
@@ -204,6 +204,16 @@ describe('run diff response', () => {
         patch: 'x'.repeat(65 * 1024),
         sizeBytes: 65 * 1024,
         truncated: true,
+        turns: [],
+      }).success,
+    ).toBe(false);
+  });
+  it('rejects inconsistent response byte counts', () => {
+    expect(
+      RunDiffOutputSchema.safeParse({
+        patch: 'short',
+        sizeBytes: 99,
+        truncated: false,
         turns: [],
       }).success,
     ).toBe(false);

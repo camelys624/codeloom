@@ -71,3 +71,18 @@ describe('diff token highlighting', () => {
     ]);
   });
 });
+describe('diff parser limits', () => {
+  it('does not manufacture files from unrelated patch preamble', () => {
+    expect(parseUnifiedDiff('warning\n--- not-a-file\n').files).toEqual([]);
+  });
+
+  it('preserves a no-newline marker as metadata inside a hunk', () => {
+    const result = parseUnifiedDiff(
+      'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n',
+    );
+    expect(result.files[0]?.hunks[0]?.lines.at(-1)).toEqual({
+      kind: 'meta',
+      text: '\\ No newline at end of file',
+    });
+  });
+});
