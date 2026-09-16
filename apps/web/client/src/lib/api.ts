@@ -12,6 +12,7 @@ import {
   RegisterRepositoryInputSchema,
   RegisterRepositoryOutputSchema,
   RepositorySchema,
+  RunDiffOutputSchema,
   RunSchema,
   RunSnapshotSchema,
   RunnerSchema,
@@ -28,6 +29,7 @@ import {
   type RegisterRepositoryInput,
   type Repository,
   type Run,
+  type RunDiffOutput,
   type RunSnapshot,
   type Runner,
   type Task,
@@ -299,6 +301,12 @@ export const api = {
       {},
       TranscriptOutputSchema.parse,
     ),
+  runDiff: (runId: string) =>
+    request(
+      `/api/v1/runs/${encodeURIComponent(runId)}/diff`,
+      {},
+      RunDiffOutputSchema.parse,
+    ),
 };
 
 export type {
@@ -310,4 +318,5 @@ export type {
   Runner,
   Task,
   TranscriptChunk,
+  RunDiffOutput,
 };

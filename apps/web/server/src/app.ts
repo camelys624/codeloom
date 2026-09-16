@@ -40,7 +40,7 @@ import {
   ResolveApprovalInputSchema,
   RetryRunInputSchema,
   RunEventSchema,
-  RunSchema,
+  RunDiffOutputSchema,
   RunSnapshotSchema,
   RunnerEventSchema,
   RunnerHelloSchema,
@@ -1617,6 +1617,73 @@ export async function buildApp(
       return { run: { ...run, current_attempt_id: attempt.id }, attempt };
     });
     reply.code(201).send(mapRun(result.run));
+  });
+
+  app.get('/api/v1/runs/:id/diff', async (request, reply) => {
+    const auth = await requireAuth(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const runId = String((request.params as { id: string }).id);
+    const run = await pool.query<Row>(
+      'SELECT id FROM runs WHERE id = $1 AND workspace_id = $2',
+      [runId, auth.workspace.id],
+    );
+    if (!run.rows[0]) {
+      reply.code(404).send(errorBody('not_found', 'Run not found'));
+      return;
+    }
+    const result = await pool.query<Row>(
+      `SELECT t.id AS turn_id, t.number, t.patch_artifact_id, ar.blob_ref
+       FROM turns t
+       JOIN attempts a ON a.id = t.attempt_id AND a.run_id = $1 AND a.workspace_id = $2
+       JOIN artifacts ar ON ar.id = t.patch_artifact_id AND ar.workspace_id = $2
+       WHERE t.workspace_id = $2 AND t.status = 'completed' AND t.patch_artifact_id IS NOT NULL
+       ORDER BY a.number, t.number`,
+      [runId, auth.workspace.id],
+    );
+    const maxBytes = 2 * 1024 * 1024;
+    let sizeBytes = 0;
+    let truncated = false;
+    const patches: string[] = [];
+    for (const row of result.rows) {
+      const path = join(config.dataDir, String(row.blob_ref));
+      let patch: string;
+      try {
+        patch = await readFile(path, 'utf8');
+      } catch {
+        continue;
+      }
+      const remaining = maxBytes - sizeBytes;
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      const bytes = Buffer.byteLength(patch);
+      if (bytes > remaining) {
+        const prefix = Buffer.from(patch)
+          .subarray(0, remaining)
+          .toString('utf8');
+        patches.push(prefix);
+        sizeBytes += Buffer.byteLength(prefix);
+        truncated = true;
+        break;
+      }
+      patches.push(patch);
+      sizeBytes += bytes;
+    }
+    reply.send(
+      RunDiffOutputSchema.parse({
+        patch: patches.join('\n'),
+        sizeBytes,
+        truncated,
+        turns: result.rows.map((row) => ({
+          turnId: String(row.turn_id),
+          number: Number(row.number),
+          ...(row.patch_artifact_id
+            ? { patchArtifactId: String(row.patch_artifact_id) }
+            : {}),
+        })),
+      }),
+    );
   });
 
   app.get('/api/v1/runs/:id', async (request, reply) => {
