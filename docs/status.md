@@ -80,7 +80,7 @@
 - `apps/web/client/src/lib/diff.ts`：解析 unified diff 为文件树、hunk、行号和增删统计；支持二进制/重命名标记和代码文件轻量 token 高亮。
 - `GET /api/v1/runs/{id}/diff`：服务端按 Attempt/Turn 顺序聚合 patch artifact，限制累计响应为 2 MB 并显式返回 `truncated`；前端按文件折叠展示，超大文件仅显示统计。
 - Run 页新增时间线、转写搜索和下载工具、累计 Diff 文件树；事件与转写仍复用现有 `AttemptStream` 游标和重连补拉链路。
-- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bun run test`（14 个测试文件，39 个测试）、Diff focused tests、`git diff --check` 已通过。生产构建的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置，不影响构建成功。
+- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bun run test`（14 个测试文件，38 个测试）、Diff focused tests、`git diff --check` 已通过。生产构建的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置，不影响构建成功。
 
 ## 3. 未完成
 
