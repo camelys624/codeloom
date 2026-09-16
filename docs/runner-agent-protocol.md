@@ -45,6 +45,18 @@ POST /api/v1/runners/me/rotate-token   →   { "runnerToken": "awr_…" }
 
 旧 token 在 60 秒后失效。用户在 Web 中撤销 Runner 后所有 token 立即失效，正在进行的 WebSocket 被关闭。没有 refresh token 与 access token 的区分。
 
+Web 管理端补充以下同源接口（均要求已认证 Workspace 成员和同源 `Origin`）：
+
+```http
+GET  /api/v1/runners/{runnerId}/status
+POST /api/v1/runners/{runnerId}/drain
+POST /api/v1/runners/{runnerId}/resume
+POST /api/v1/runners/{runnerId}/rotate-token
+POST /api/v1/runners/{runnerId}/revoke
+```
+
+状态响应包含 `runner`、`load`、`worktrees`、`activeAttempts` 和最近 24 小时的 `staleAttempts`。`drain` 让 Runner 停止领取新 Attempt，但保留现有 Attempt 和 WebSocket；Runner 重连时服务端不会把 `draining` 改回 `online`。`resume` 根据当前 WebSocket 连接恢复为 `online` 或 `offline`。`rotate-token` 返回新 token，旧 token 保留 60 秒；`revoke` 立即清除 token 并关闭现有 WebSocket。
+
 ## 4. 注册仓库
 
 ```bash

@@ -1,11 +1,11 @@
 # 实现状态与交接
 
-- 日期：2026-09-16
+- 日期：2026-09-17
 - 对应文档：0.6 加 ADR-027；阶段 2 Run 体验增强
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 已完成应用壳、Task 看板拖拽、Run 时间线/转写工具以及累计 Diff 文件树和轻量语法高亮。服务端仍是 PostgreSQL 唯一事实，浏览器通过已有 Run 快照、事件、transcript 游标和新增累计 Diff REST 接口获取数据。
+阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 已完成应用壳、Task 看板拖拽、Run 时间线/转写工具、累计 Diff 文件树和轻量语法高亮，并新增 Runner 状态与生命周期管理。服务端仍是 PostgreSQL 唯一事实，浏览器通过已有 Run 快照、事件、transcript 游标和新增 Runner 状态 REST 接口获取数据。
 
 ## 2. 已完成
 
@@ -29,7 +29,7 @@
 - 位置：`packages/contracts/src/`，入口 `index.ts`。
 - 有界 JSON 校验 `isBoundedJson`（`validation.ts`）防循环引用、getter、深度与字节数，测试覆盖。
 - 2026-09-10 变更（ADR-027）：`engine` 加 `pi`；新增 `AgentProtocol = 'acp' | 'sdk' | 'rpc'`。
-- 验证：`packages/contracts/test/contracts.test.ts` 9 个测试，已验证。
+- 验证：`packages/contracts/test/contracts.test.ts` 10 个测试，已验证。
 
 ### 2.3 `apps/web/server/db`
 
@@ -80,7 +80,9 @@
 - `apps/web/client/src/lib/diff.ts`：解析 unified diff 为文件树、hunk、行号和增删统计；支持二进制/重命名标记和代码文件轻量 token 高亮。
 - `GET /api/v1/runs/{id}/diff`：服务端按 Attempt/Turn 顺序聚合 patch artifact，限制累计响应为 2 MB 并显式返回 `truncated`；前端按文件折叠展示，超大文件仅显示统计。
 - Run 页新增时间线、转写搜索和下载工具、累计 Diff 文件树；事件与转写仍复用现有 `AttemptStream` 游标和重连补拉链路。
-- 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bun run test`（14 个测试文件，42 个测试）、Diff focused tests、`git diff --check` 已通过。生产构建的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置，不影响构建成功。
+- `apps/web/client/src/main.tsx` 的 Runner 页面现在展示在线状态、Load、Worktrees、最近心跳、Agent Profiles 和活跃/最近结束 Attempt，并提供排空、恢复领取、token 轮换和撤销操作；token 只通过一次性提示显示。
+- `GET /api/v1/runners/{id}/status` 返回契约化 Runner 状态、负载、worktree 占用、活跃 Attempt 和最近 24 小时已结束 Attempt；`POST /drain`、`POST /resume`、`POST /rotate-token` 补齐阶段二状态管理动作，排空状态在 Runner 重连 hello 时保留。
+- 验证：`bun run typecheck`、`bun run build`、`bun run test`（14 个测试文件，43 个测试）、`bun run check:contracts`、`bun run format:check`、`git diff --check` 已通过。构建中的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置。
 
 ## 3. 未完成
 

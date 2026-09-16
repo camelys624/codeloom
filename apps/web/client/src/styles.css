@@ -1248,3 +1248,59 @@ pre {
     grid-template-columns: 1fr;
   }
 }
+.runner-card {
+  display: grid;
+  gap: 14px;
+}
+.runner-card-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.runner-card-heading p {
+  margin: 4px 0 0;
+}
+.runner-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.runner-metrics > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.runner-metrics strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.runner-actions {
+  padding-top: 2px;
+}
+.runner-attempts {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+}
+.badge.draining {
+  background: #fef3c7;
+  color: #92400e;
+}
+.badge.revoked,
+.badge.offline {
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+@media (max-width: 800px) {
+  .runner-metrics {
+    grid-template-columns: 1fr;
+  }
+}

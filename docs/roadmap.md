@@ -49,8 +49,7 @@
 - Run 时间线（事件 + Turn）；
 - 转写回放、搜索、下载；
 - 每 Turn Diff 的文件树视图、整 Run 累积 Diff、Diff 语法高亮；Diff 性能验收与库切换判定（ADR-026）；
-- Runner 状态页：负载、活跃 Attempt、stale 记录、worktree 占用；
-- token 轮换 UI、Runner draining；
+- Runner 状态页：负载、活跃 Attempt、stale 记录、worktree 占用；token 轮换 UI、Runner draining；**已完成**。
 - Runner 单文件分发评估（Node SEA 或 `bun build --compile`）；
 - 转写归档任务、worktree 清理任务；
 - `/metrics` 与告警规则；

@@ -1,4 +1,4 @@
-import { ServerHelloSchema } from '../src/index.js';
+import { RunnerStatusOutputSchema, ServerHelloSchema } from '../src/index.js';
 import { describe, expect, it } from 'vitest';
 import {
   AttemptCancelRequestedEventSchema,
@@ -217,5 +217,43 @@ describe('run diff response', () => {
         turns: [],
       }).success,
     ).toBe(false);
+  });
+});
+describe('runner status output', () => {
+  it('carries live load, worktree occupancy, active attempts, and stale attempts', () => {
+    const attempt = {
+      id: 'att_test',
+      runId: 'run_test',
+      number: 1,
+      runnerId: 'rnr_test',
+      agentProfileId: 'agp_test',
+      status: 'running' as const,
+      resumeFrom: { kind: 'base' as const },
+      branchName: 'aw/test/a1',
+      baseCommitSha: 'a'.repeat(40),
+      createdAt: '2026-09-16T00:00:00.000Z',
+      claimedAt: '2026-09-16T00:00:01.000Z',
+      startedAt: '2026-09-16T00:00:02.000Z',
+      leaseExpiresAt: '2026-09-16T00:00:45.000Z',
+      lastHeartbeatAt: '2026-09-16T00:00:15.000Z',
+    };
+    const output = RunnerStatusOutputSchema.parse({
+      runner: {
+        id: 'rnr_test',
+        workspaceId: 'ws_test',
+        name: 'local',
+        kind: 'local',
+        status: 'online',
+        maxConcurrency: 2,
+        createdBy: 'usr_test',
+        createdAt: '2026-09-16T00:00:00.000Z',
+      },
+      load: { active: 1, capacity: 2 },
+      worktrees: { active: 1, capacity: 2 },
+      activeAttempts: [attempt],
+      staleAttempts: [],
+    });
+    expect(output.worktrees.active).toBe(1);
+    expect(output.activeAttempts[0]?.id).toBe('att_test');
   });
 });

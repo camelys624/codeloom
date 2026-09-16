@@ -225,7 +225,7 @@ Runner 直接连接 Fastify API，不连接 Vite。浏览器只连接 Vite 提�
 4. 转写渲染段与虚拟列表（§4.2）；
 5. 审批卡片、追问、停止这一轮、取消、重试、完成；
 6. 每 Turn Diff（§4.1）；
-7. Runner 列表与配对码、Repository、AgentProfile；
+7. Runner 列表与配对码、Repository、AgentProfile、Runner 状态管理（负载、Attempt、排空、token 轮换与撤销）；
 8. 阶段 2：Circle 借鉴、看板拖拽、复杂筛选、时间线、显示设置。
 
 ## 8. 工具链约束

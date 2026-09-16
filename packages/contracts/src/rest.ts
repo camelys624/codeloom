@@ -237,6 +237,15 @@ export const CreateRunnerOutputSchema = z.strictObject({
   expiresAt: TimestampSchema,
 });
 export type CreateRunnerOutput = z.infer<typeof CreateRunnerOutputSchema>;
+export const RunnerStatusOutputSchema = z.strictObject({
+  runner: RunnerSchema,
+  load: z.strictObject({ active: CountSchema, capacity: CountSchema }),
+  worktrees: z.strictObject({ active: CountSchema, capacity: CountSchema }),
+  activeAttempts: z.array(AttemptSchema).max(1024),
+  staleAttempts: z.array(AttemptSchema).max(1024),
+});
+export type RunnerStatusOutput = z.infer<typeof RunnerStatusOutputSchema>;
+
 export const CreateAgentProfileInputSchema = AgentProfileSchema.pick({
   runnerId: true,
   engine: true,

@@ -1361,11 +1361,15 @@ function RunnersPage() {
     );
   return (
     <div className="grid">
-      <div>
-        <h2 className="title">Runners</h2>
-        <p className="muted">
-          Runner 使用主动出站 WebSocket；token 只在配对时显示。
-        </p>
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">Workspace</span>
+          <h2 className="page-title">Runners</h2>
+          <p className="page-subtitle">
+            查看负载、活跃 Attempt 和最近失败；排空后 Runner 不再领取新任务。
+          </p>
+        </div>
+        <span className="badge">{runners.data.length} runners</span>
       </div>
       <section className="grid two">
         <section className="card">
@@ -1505,6 +1509,9 @@ function RunnersPage() {
             profiles={profiles.data.filter(
               (profile) => profile.runnerId === runner.id,
             )}
+            onChanged={() => {
+              void client.invalidateQueries({ queryKey: ['runners'] });
+            }}
           />
         ))}
       </section>
@@ -1533,20 +1540,124 @@ function RunnersPage() {
 function RunnerCard({
   runner,
   profiles,
+  onChanged,
 }: {
   runner: Runner;
   profiles: AgentProfile[];
+  onChanged: () => void;
 }) {
+  const client = useQueryClient();
+  const status = useQuery({
+    queryKey: ['runner-status', runner.id],
+    queryFn: () => api.runnerStatus(runner.id),
+    refetchInterval: 5_000,
+  });
+  const action = useMutation({
+    mutationFn: async (kind: 'drain' | 'resume' | 'revoke' | 'rotate') => {
+      if (kind === 'drain')
+        return { kind, value: await api.drainRunner(runner.id) };
+      if (kind === 'resume')
+        return { kind, value: await api.resumeRunner(runner.id) };
+      if (kind === 'revoke') {
+        await api.revokeRunner(runner.id);
+        return { kind, value: undefined };
+      }
+      return { kind, value: await api.rotateRunnerToken(runner.id) };
+    },
+    onSuccess: ({ kind, value }) => {
+      if (kind === 'rotate' && value)
+        window.prompt(
+          '保存新的 Runner token；旧 token 60 秒后失效',
+          value.runnerToken,
+        );
+      void client.invalidateQueries({ queryKey: ['runners'] });
+      void client.invalidateQueries({ queryKey: ['runner-status', runner.id] });
+      onChanged();
+    },
+  });
+  const data = status.data;
   return (
-    <section className="card">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <strong>{runner.name}</strong>
+    <section className="card runner-card">
+      <div className="runner-card-heading">
+        <div>
+          <strong>{runner.name}</strong>
+          <p className="muted small">
+            {runner.os ?? 'unknown'} / {runner.arch ?? 'unknown'} ·{' '}
+            {runner.daemonVersion ?? '未上报'}
+          </p>
+        </div>
         <span className={`badge ${runner.status}`}>{runner.status}</span>
       </div>
-      <p className="muted small">
-        {runner.os ?? 'unknown'} / {runner.arch ?? 'unknown'} · capacity{' '}
-        {runner.maxConcurrency}
-      </p>
+      <div className="runner-metrics">
+        <div>
+          <span className="muted small">Load</span>
+          <strong>
+            {data?.load.active ?? '—'} /{' '}
+            {data?.load.capacity ?? runner.maxConcurrency}
+          </strong>
+        </div>
+        <div>
+          <span className="muted small">Worktrees</span>
+          <strong>
+            {data?.worktrees.active ?? '—'} /{' '}
+            {data?.worktrees.capacity ?? runner.maxConcurrency}
+          </strong>
+        </div>
+        <div>
+          <span className="muted small">Last seen</span>
+          <strong>
+            {runner.lastSeenAt
+              ? new Date(runner.lastSeenAt).toLocaleString()
+              : '—'}
+          </strong>
+        </div>
+      </div>
+      <div className="row runner-actions">
+        {runner.status === 'draining' ? (
+          <button
+            className="secondary compact-button"
+            disabled={action.isPending}
+            onClick={() => action.mutate('resume')}
+            type="button"
+          >
+            恢复领取
+          </button>
+        ) : (
+          <button
+            className="secondary compact-button"
+            disabled={action.isPending || runner.status === 'revoked'}
+            onClick={() => action.mutate('drain')}
+            type="button"
+          >
+            排空
+          </button>
+        )}
+        <button
+          className="secondary compact-button"
+          disabled={action.isPending || runner.status === 'revoked'}
+          onClick={() => action.mutate('rotate')}
+          type="button"
+        >
+          轮换 token
+        </button>
+        <button
+          className="danger compact-button"
+          disabled={action.isPending || runner.status === 'revoked'}
+          onClick={() => {
+            if (
+              window.confirm(
+                `撤销 Runner「${runner.name}」？正在运行的连接会被关闭。`,
+              )
+            )
+              action.mutate('revoke');
+          }}
+          type="button"
+        >
+          撤销
+        </button>
+      </div>
+      {action.error && <ErrorNotice error={action.error} />}
+      {status.error && <ErrorNotice error={status.error} />}
       <h4>Agent Profiles</h4>
       {profiles.length ? (
         <ul>
@@ -1559,6 +1670,33 @@ function RunnerCard({
         </ul>
       ) : (
         <p className="muted small">未配置 Profile。</p>
+      )}
+      {data && (
+        <>
+          <h4>Active Attempts</h4>
+          {data.activeAttempts.length ? (
+            <ul className="runner-attempts">
+              {data.activeAttempts.map((attempt) => (
+                <li key={attempt.id}>
+                  <Link to={`/runs/${attempt.runId}`}>
+                    Attempt #{attempt.number}
+                  </Link>{' '}
+                  <span className={`badge ${attempt.status}`}>
+                    {attempt.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">没有活跃 Attempt。</p>
+          )}
+          {data.staleAttempts.length > 0 && (
+            <p className="notice small">
+              最近 24 小时有 {data.staleAttempts.length} 个已结束 Attempt；可从
+              Run 页面重试。
+            </p>
+          )}
+        </>
       )}
     </section>
   );
