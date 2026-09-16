@@ -9,6 +9,7 @@ import {
   MAX_FRAME_STRING_BYTES,
   MAX_JSON_DEPTH,
   RunnerEventSchema,
+  RunDiffOutputSchema,
   SequenceSchema,
   TranscriptFramesSchema,
   TranscriptQuerySchema,
@@ -17,7 +18,6 @@ import {
   projectRunStatus,
   transitionAttempt,
   transitionTask,
-  transitionTurn,
 } from '../src/index.js';
 
 describe('irreversible execution state', () => {
@@ -186,5 +186,26 @@ describe('runner reconnect controls', () => {
         ],
       }).attempts[0]?.controls[0]?.type,
     ).toBe('attempt.cancel');
+  });
+});
+
+describe('run diff response', () => {
+  it('accepts ordered turn metadata and rejects oversized patch text', () => {
+    expect(
+      RunDiffOutputSchema.parse({
+        patch: 'diff --git a/src/a.ts b/src/a.ts\n',
+        sizeBytes: 34,
+        truncated: false,
+        turns: [{ turnId: 'trn_one', number: 1, patchArtifactId: 'art_one' }],
+      }).turns[0]?.number,
+    ).toBe(1);
+    expect(
+      RunDiffOutputSchema.safeParse({
+        patch: 'x'.repeat(65 * 1024),
+        sizeBytes: 65 * 1024,
+        truncated: true,
+        turns: [],
+      }).success,
+    ).toBe(false);
   });
 });
