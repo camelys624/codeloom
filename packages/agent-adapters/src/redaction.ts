@@ -1,7 +1,9 @@
-import { z } from 'zod';
 import { StringDecoder } from 'node:string_decoder';
-import type { AgentEngine } from '@agent-workspace/contracts';
-
+import { z } from 'zod';
+import {
+  MAX_FRAME_STRING_BYTES,
+  type AgentEngine,
+} from '@agent-workspace/contracts';
 const COMMON_ENV = [
   'PATH',
   'HOME',
@@ -67,14 +69,26 @@ export function engineEnvironment(
 }
 
 const SECRET_NAME = /(?:authorization|cookie|(?:^|_)(?:token|key|secret)$)/i;
-const MAX_STRING = 32 * 1024;
+const MAX_STRING = MAX_FRAME_STRING_BYTES;
+export const MAX_FRAME_TEXT_BYTES = MAX_STRING;
 const JsonSchema = z.json();
 
+export function truncateUtf8(
+  text: string,
+  maxBytes = MAX_FRAME_TEXT_BYTES,
+  marker = '[TRUNCATED]',
+): { text: string; truncated: boolean } {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes)
+    return { text, truncated: false };
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  const prefix = Buffer.from(text).subarray(0, maxBytes - markerBytes);
+  return {
+    text: new StringDecoder('utf8').write(prefix) + marker,
+    truncated: true,
+  };
+}
 function boundedText(text: string): string {
-  if (Buffer.byteLength(text, 'utf8') <= MAX_STRING) return text;
-  const marker = '[TRUNCATED]';
-  const prefix = Buffer.from(text).subarray(0, MAX_STRING - marker.length);
-  return new StringDecoder('utf8').write(prefix) + marker;
+  return truncateUtf8(text).text;
 }
 
 export class Redactor {
