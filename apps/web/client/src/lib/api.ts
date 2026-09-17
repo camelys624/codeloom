@@ -1,7 +1,6 @@
 import {
   AgentProfileSchema,
   ApprovalRequestSchema,
-  AttemptSchema,
   CreateAgentProfileInputSchema,
   CreateRunnerInputSchema,
   CreateRunnerOutputSchema,
@@ -12,10 +11,12 @@ import {
   RegisterRepositoryInputSchema,
   RegisterRepositoryOutputSchema,
   RepositorySchema,
+  RotateRunnerTokenOutputSchema,
   RunDiffOutputSchema,
   RunSchema,
   RunSnapshotSchema,
   RunnerSchema,
+  RunnerStatusOutputSchema,
   TaskSchema,
   TranscriptChunkSchema,
   TranscriptOutputSchema,
@@ -32,6 +33,7 @@ import {
   type RunDiffOutput,
   type RunSnapshot,
   type Runner,
+  type RunnerStatusOutput,
   type Task,
   type TranscriptChunk,
 } from '@agent-workspace/contracts';
@@ -212,6 +214,36 @@ export const api = {
       },
       CreateRunnerOutputSchema.parse,
     ),
+  runnerStatus: (id: string) =>
+    request(
+      `/api/v1/runners/${encodeURIComponent(id)}/status`,
+      {},
+      RunnerStatusOutputSchema.parse,
+    ),
+  revokeRunner: (id: string) =>
+    request(
+      `/api/v1/runners/${encodeURIComponent(id)}/revoke`,
+      { method: 'POST', body: '{}' },
+      () => undefined,
+    ),
+  drainRunner: (id: string) =>
+    request(
+      `/api/v1/runners/${encodeURIComponent(id)}/drain`,
+      { method: 'POST', body: '{}' },
+      RunnerSchema.parse,
+    ),
+  resumeRunner: (id: string) =>
+    request(
+      `/api/v1/runners/${encodeURIComponent(id)}/resume`,
+      { method: 'POST', body: '{}' },
+      RunnerSchema.parse,
+    ),
+  rotateRunnerToken: (id: string) =>
+    request(
+      `/api/v1/runners/${encodeURIComponent(id)}/rotate-token`,
+      { method: 'POST', body: '{}' },
+      RotateRunnerTokenOutputSchema.parse,
+    ),
   profiles: () =>
     request(
       '/api/v1/agent-profiles',
@@ -315,7 +347,6 @@ export type {
   MeOutput,
   Repository,
   RunSnapshot,
-  Runner,
   Task,
   TranscriptChunk,
   RunDiffOutput,

@@ -39,12 +39,15 @@ import {
   RegisterRepositoryInputSchema,
   ResolveApprovalInputSchema,
   RetryRunInputSchema,
+  RotateRunnerTokenOutputSchema,
   RunEventSchema,
   RunDiffOutputSchema,
   RunSnapshotSchema,
   RunnerEventSchema,
   RunnerHelloSchema,
   RunnerMessageSchema,
+  RunnerSchema,
+  RunnerStatusOutputSchema,
   ServerHelloSchema,
   RepositoryRefFailedSchema,
   RepositoryRefResolvedSchema,
@@ -1394,6 +1397,133 @@ export async function buildApp(
     reply.send(result.rows.map(mapAgentProfile));
   });
 
+  app.get('/api/v1/runners/:id/status', async (request, reply) => {
+    const auth = await requireAuth(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const runnerId = String((request.params as { id: string }).id);
+    const runnerResult = await pool.query<Row>(
+      'SELECT * FROM runners WHERE id = $1 AND workspace_id = $2',
+      [runnerId, auth.workspace.id],
+    );
+    const runnerRow = runnerResult.rows[0];
+    if (!runnerRow) {
+      reply.code(404).send(errorBody('not_found', 'Runner not found'));
+      return;
+    }
+    const [active, stale] = await Promise.all([
+      pool.query<Row>(
+        `SELECT * FROM attempts
+         WHERE runner_id = $1 AND workspace_id = $2
+           AND status IN ('claimed','preparing','running','idle','waiting_approval')
+         ORDER BY number, id`,
+        [runnerId, auth.workspace.id],
+      ),
+      pool.query<Row>(
+        `SELECT * FROM attempts
+         WHERE runner_id = $1 AND workspace_id = $2
+           AND status IN ('failed','lost','canceled')
+           AND finished_at > now() - interval '24 hours'
+         ORDER BY finished_at DESC, number DESC
+         LIMIT 1024`,
+        [runnerId, auth.workspace.id],
+      ),
+    ]);
+    const capacity = Number(runnerRow.max_concurrency);
+    const activeAttempts = active.rows.map(mapAttempt);
+    const staleAttempts = stale.rows.map(mapAttempt);
+    reply.send(
+      RunnerStatusOutputSchema.parse({
+        runner: mapRunner(runnerRow),
+        load: { active: activeAttempts.length, capacity },
+        worktrees: { active: activeAttempts.length, capacity },
+        activeAttempts,
+        staleAttempts,
+      }),
+    );
+  });
+
+  app.post('/api/v1/runners/:id/drain', async (request, reply) => {
+    const auth = await ensureWorkspace(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const runnerId = String((request.params as { id: string }).id);
+    const result = await pool.query<Row>(
+      `UPDATE runners SET status = 'draining'
+       WHERE id = $1 AND workspace_id = $2 AND status IN ('offline','online')
+       RETURNING *`,
+      [runnerId, auth.workspace.id],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      const existing = await pool.query<Row>(
+        'SELECT id, status FROM runners WHERE id = $1 AND workspace_id = $2',
+        [runnerId, auth.workspace.id],
+      );
+      if (!existing.rows[0])
+        reply.code(404).send(errorBody('not_found', 'Runner not found'));
+      else
+        reply
+          .code(409)
+          .send(
+            errorBody('invalid_status', 'Runner is not available to drain'),
+          );
+      return;
+    }
+    reply.send(RunnerSchema.parse(mapRunner(row)));
+  });
+
+  app.post('/api/v1/runners/:id/resume', async (request, reply) => {
+    const auth = await ensureWorkspace(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const runnerId = String((request.params as { id: string }).id);
+    const result = await pool.query<Row>(
+      `UPDATE runners SET status = $3
+       WHERE id = $1 AND workspace_id = $2 AND status = 'draining'
+       RETURNING *`,
+      [
+        runnerId,
+        auth.workspace.id,
+        runnerSockets.has(runnerId) ? 'online' : 'offline',
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      const existing = await pool.query<Row>(
+        'SELECT * FROM runners WHERE id = $1 AND workspace_id = $2',
+        [runnerId, auth.workspace.id],
+      );
+      if (!existing.rows[0])
+        reply.code(404).send(errorBody('not_found', 'Runner not found'));
+      else
+        reply
+          .code(409)
+          .send(errorBody('invalid_status', 'Runner is not draining'));
+      return;
+    }
+    if (runnerSockets.has(runnerId))
+      sendRunner(runnerId, { type: 'work.available' });
+    reply.send(RunnerSchema.parse(mapRunner(row)));
+  });
+
+  app.post('/api/v1/runners/:id/rotate-token', async (request, reply) => {
+    const auth = await ensureWorkspace(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const runnerId = String((request.params as { id: string }).id);
+    const token = newToken('awr_', 32);
+    const result = await pool.query<Row>(
+      `UPDATE runners SET previous_token_hash = token_hash,
+              previous_token_expires_at = now() + interval '60 seconds',
+              token_hash = $3, token_rotated_at = now()
+       WHERE id = $1 AND workspace_id = $2 AND status <> 'revoked'
+       RETURNING id`,
+      [runnerId, auth.workspace.id, hashToken(token)],
+    );
+    if (!result.rows[0]) {
+      reply.code(404).send(errorBody('not_found', 'Runner not found'));
+      return;
+    }
+    reply.send(RotateRunnerTokenOutputSchema.parse({ runnerToken: token }));
+  });
+
   app.post('/api/v1/runners/:id/revoke', async (request, reply) => {
     const auth = await ensureWorkspace(request as RequestWithAuth, reply);
     if (!auth) return;
@@ -2256,7 +2386,10 @@ export async function buildApp(
           if (hello.protocolVersion !== PROTOCOL_VERSION)
             throw new Error('Unsupported protocol version');
           await pool.query(
-            `UPDATE runners SET status = 'online', daemon_version = $2, os = $3, arch = $4, max_concurrency = $5, last_seen_at = now() WHERE id = $1 AND status <> 'revoked'`,
+            `UPDATE runners SET status = CASE WHEN status = 'draining' THEN 'draining' ELSE 'online' END,
+                    daemon_version = $2, os = $3, arch = $4, max_concurrency = $5,
+                    last_seen_at = now()
+             WHERE id = $1 AND status <> 'revoked'`,
             [
               runner.id,
               hello.daemonVersion,
