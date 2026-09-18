@@ -10,5 +10,6 @@ export {
   Redactor,
   RedactedLines,
 } from './redaction.js';
+export { TurnBudget } from './turn-budget.js';
 export { processIsAlive, type ProcessIdentity } from './process.js';
 export { PiAdapter, PiSession, type PiAdapterOptions } from './pi.js';

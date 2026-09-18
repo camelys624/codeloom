@@ -25,6 +25,7 @@ import {
   type UsageSnapshot,
 } from '@agent-workspace/contracts';
 import { AgentProcess } from './process.js';
+import { TurnBudget } from './turn-budget.js';
 import {
   engineEnvironment,
   RedactedLines,
@@ -233,6 +234,7 @@ type ActiveTurn = {
   timedOut: boolean;
   ended: AbortController;
   settled: PromiseWithResolvers<void>;
+  budget: TurnBudget;
   text: RedactedLines;
   thought: RedactedLines;
   sawText: boolean;
@@ -494,14 +496,13 @@ export class PiSession implements AgentSessionHandle {
         },
       };
     this.totalOutput = 0;
-    this.outputTruncated = false;
-    this.tools.clear();
     const turn: ActiveTurn = {
       turnId: input.turnId,
       canceled: false,
       timedOut: false,
       ended: new AbortController(),
       settled: Promise.withResolvers<void>(),
+      budget: undefined as unknown as TurnBudget,
       text: new RedactedLines(this.redactor, (text, truncated) =>
         this.emit({
           t: 'text_delta',
@@ -518,13 +519,18 @@ export class PiSession implements AgentSessionHandle {
       ),
       sawText: false,
     };
+    turn.budget = new TurnBudget(
+      this.input.clock,
+      this.input.runConfig.maxTurnMinutes * 60_000,
+      () => {
+        turn.timedOut = true;
+        void this.cancelTurn().catch(() => undefined);
+      },
+    );
     this.active = turn;
+    turn.budget.start();
     const onAbort = () => void this.cancelTurn().catch(() => undefined);
     input.signal.addEventListener('abort', onAbort, { once: true });
-    const timer = this.input.clock.setTimeout(() => {
-      turn.timedOut = true;
-      onAbort();
-    }, this.input.runConfig.maxTurnMinutes * 60_000);
     try {
       await this.rpc.request({ type: 'prompt', message: input.text });
       await turn.settled.promise;
@@ -544,7 +550,7 @@ export class PiSession implements AgentSessionHandle {
         error: this.error(error, 'agent_crashed'),
       };
     } finally {
-      this.input.clock.clearTimeout(timer);
+      turn.budget.stop();
       input.signal.removeEventListener('abort', onAbort);
       turn.ended.abort();
       turn.text.finish();
@@ -751,6 +757,7 @@ export class PiSession implements AgentSessionHandle {
       const canceled = Promise.withResolvers<PermissionDecision>();
       const onAbort = () => canceled.resolve({ decision: 'deny' });
       turn.ended.signal.addEventListener('abort', onAbort, { once: true });
+      turn.budget.pause();
       try {
         decision = PermissionDecisionSchema.parse(
           await Promise.race([
@@ -764,6 +771,7 @@ export class PiSession implements AgentSessionHandle {
           ]),
         );
       } finally {
+        turn.budget.resume();
         turn.ended.signal.removeEventListener('abort', onAbort);
       }
     }
