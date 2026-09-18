@@ -1782,27 +1782,32 @@ export async function buildApp(
       } catch {
         continue;
       }
-      const remaining = maxBytes - sizeBytes;
+      const separator = patches.length > 0 ? '\n' : '';
+      const remaining =
+        maxBytes - sizeBytes - Buffer.byteLength(separator, 'utf8');
       if (remaining <= 0) {
         truncated = true;
         break;
       }
-      const bytes = Buffer.byteLength(patch);
-      if (bytes > remaining) {
+      const patchBytes = Buffer.byteLength(patch, 'utf8');
+      if (patchBytes > remaining) {
         const prefix = Buffer.from(patch)
           .subarray(0, remaining)
           .toString('utf8');
-        patches.push(prefix);
-        sizeBytes += Buffer.byteLength(prefix);
+        patches.push(`${separator}${prefix}`);
+        sizeBytes +=
+          Buffer.byteLength(separator, 'utf8') + Buffer.byteLength(prefix, 'utf8');
         truncated = true;
         break;
       }
-      patches.push(patch);
-      sizeBytes += bytes;
+      patches.push(`${separator}${patch}`);
+      sizeBytes += Buffer.byteLength(separator, 'utf8') + patchBytes;
     }
+    const patch = patches.join('');
+    sizeBytes = Buffer.byteLength(patch, 'utf8');
     reply.send(
       RunDiffOutputSchema.parse({
-        patch: patches.join('\n'),
+        patch,
         sizeBytes,
         truncated,
         turns: result.rows.map((row) => ({

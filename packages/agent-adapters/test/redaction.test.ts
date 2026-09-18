@@ -4,6 +4,7 @@ import {
   RedactedLines,
   Redactor,
   engineEnvironment,
+  truncateUtf8,
 } from '../src/redaction.js';
 
 describe('Agent output security boundary', () => {
@@ -46,6 +47,16 @@ describe('Agent output security boundary', () => {
       FrameTextSchema.safeParse(new Redactor({}).json('汉'.repeat(16_000)))
         .success,
     ).toBe(true);
+  });
+
+  it('truncates multibyte frame text within the byte limit', () => {
+    const result = truncateUtf8('汉'.repeat(16_000));
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThanOrEqual(
+      32 * 1024,
+    );
+    expect(FrameTextSchema.safeParse(result.text).success).toBe(true);
+    expect(result.text.endsWith('[TRUNCATED]')).toBe(true);
   });
 
   it('forwards only declared engine variables, never runner credentials or process injection', () => {

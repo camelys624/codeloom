@@ -1,3 +1,4 @@
+import { utf8ByteLength } from '../src/index.js';
 import { RunnerStatusOutputSchema, ServerHelloSchema } from '../src/index.js';
 import { describe, expect, it } from 'vitest';
 import {
@@ -92,6 +93,26 @@ describe('untrusted transport boundaries', () => {
         { t: 'text_delta', text },
         { t: 'text_delta', text },
       ]).success,
+    ).toBe(false);
+  });
+
+  it('requires cumulative diff sizeBytes to count separators and UTF-8 bytes', () => {
+    const patch = 'diff --git a/文件.txt b/文件.txt\n+新增';
+    expect(
+      RunDiffOutputSchema.safeParse({
+        patch,
+        sizeBytes: utf8ByteLength(patch),
+        truncated: false,
+        turns: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      RunDiffOutputSchema.safeParse({
+        patch,
+        sizeBytes: patch.length,
+        truncated: false,
+        turns: [],
+      }).success,
     ).toBe(false);
   });
 
@@ -194,7 +215,7 @@ describe('run diff response', () => {
     expect(
       RunDiffOutputSchema.parse({
         patch: 'diff --git a/src/a.ts b/src/a.ts\n',
-        sizeBytes: 33,
+        sizeBytes: utf8ByteLength('diff --git a/src/a.ts b/src/a.ts\n'),
         truncated: false,
         turns: [{ turnId: 'trn_one', number: 1, patchArtifactId: 'art_one' }],
       }).turns[0]?.number,
@@ -206,7 +227,7 @@ describe('run diff response', () => {
         truncated: true,
         turns: [],
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
   it('rejects inconsistent response byte counts', () => {
     expect(

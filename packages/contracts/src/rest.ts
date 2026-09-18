@@ -126,7 +126,7 @@ export const RunSnapshotSchema = z.strictObject({
 export type RunSnapshot = z.infer<typeof RunSnapshotSchema>;
 export const RunDiffOutputSchema = z
   .strictObject({
-    patch: TextSchema,
+    patch: z.string().max(MAX_RUN_DIFF_BYTES),
     sizeBytes: CountSchema,
     truncated: z.boolean(),
     turns: z
