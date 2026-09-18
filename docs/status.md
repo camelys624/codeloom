@@ -84,9 +84,11 @@
 - `GET /api/v1/runners/{id}/status` 返回契约化 Runner 状态、负载、worktree 占用、活跃 Attempt 和最近 24 小时已结束 Attempt；`POST /drain`、`POST /resume`、`POST /rotate-token` 补齐阶段二状态管理动作，排空状态在 Runner 重连 hello 时保留。
 - `GET /metrics`：Prometheus text format 指标端点，支持可选 `METRICS_TOKEN` Bearer 认证；指标覆盖 Runner、Attempt 状态、丢失、自动重试、领取延迟、事件延迟、转写、审批、Run 活动 Attempt 不变量、Runner nack 和浏览器连接。
 - `apps/web/server/src/metrics.ts` 与 `apps/web/server/test/metrics.test.ts`：指标 SQL 聚合、完整 status labels、格式化、数据库失败传播和进程内 Runner 计数测试；部署文档包含 Prometheus 告警表达式。
-- `apps/web/server/src/transcript-archive.ts`：每小时扫描超过 180 天的 transcript chunks，按 Attempt 打包为受限 `log` artifact，成功写入 artifact 后删除原始 chunks；`GET /api/v1/attempts/{id}/transcript-archives` 提供归档清单。
-- 验证：指标定向测试 4 个通过；归档格式测试 1 个通过；`bun run typecheck`、`bun run build`、受影响文件 Prettier 检查通过。仓库级 `bun run format:check` 仍被既有 `AGENTS.md` 格式告警阻断，未格式化该规则文件。
-- 阶段 2 可观测性与转写归档已完成；worktree 清理、Runner 单文件分发和混沌测试仍未完成。
+- `apps/runner/src/daemon.ts`：Runner 启动时拉取完成超过 14 天的 worktree 清理候选，检查干净后通过 `git worktree remove` 删除；脏 worktree 跳过并上报状态，原始 checkout 永不触碰。
+- `docs/runner-single-file.md`：记录 `bun build --compile` Linux x64 评估，约 81.7 MB ELF 产物，暂不切换 Node SEA。
+- `apps/runner/test/chaos.test.ts`：覆盖浏览器事件乱序/去重和 Runner outbox 写入、重载、ack 删除不变量。
+- 验证：Runner 清理测试 2 个通过，混沌不变量测试 2 个通过；`bun build --compile` 产物可执行并成功运行 `status`。
+- 阶段 2 收口项已完成：worktree 清理、单文件分发评估、可靠性混沌基础场景；后续仅需扩大多平台混沌矩阵和正式发布工程。
 
 ## 3. 未完成
 

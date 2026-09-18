@@ -50,10 +50,10 @@
 - 转写回放、搜索、下载；
 - 每 Turn Diff 的文件树视图、整 Run 累积 Diff、Diff 语法高亮；Diff 性能验收与库切换判定（ADR-026）；
 - Runner 状态页：负载、活跃 Attempt、stale 记录、worktree 占用；token 轮换 UI、Runner draining；**已完成**。
-- Runner 单文件分发评估（Node SEA 或 `bun build --compile`）；
-- 转写归档任务：**已完成**；worktree 清理任务仍待实现；
+- Runner 单文件分发评估：**已完成评估**，Linux x64 采用 `bun build --compile` 候选；
+- 转写归档任务：**已完成**；worktree 清理任务：**已完成**；
 - `/metrics` 与告警规则：**指标端点与 Prometheus 告警表达式已完成**；
-- 混沌测试：随机杀 Runner、服务端、网络，验证不变量。
+- 混沌测试：**基础可靠性不变量场景已完成**，多平台和长时矩阵留作发布前扩展。
 
 ## 阶段 3：结果落地
 

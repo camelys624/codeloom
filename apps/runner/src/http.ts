@@ -1,8 +1,9 @@
 import type {
+  AgentProfile,
   ClaimAttemptsOutput,
   PairRunnerInput,
   RegisterRepositoryInput,
-  AgentProfile,
+  WorktreeCleanupOutput,
 } from '@agent-workspace/contracts';
 import {
   AgentProfileSchema,
@@ -10,6 +11,8 @@ import {
   PairRunnerOutputSchema,
   RegisterRepositoryOutputSchema,
   UploadArtifactOutputSchema,
+  WorktreeCleanupOutputSchema,
+  WorktreeCleanupReportInputSchema,
 } from '@agent-workspace/contracts';
 import type { RunnerCredentials } from './config.js';
 
@@ -104,4 +107,32 @@ export async function uploadArtifact(
     UploadArtifactOutputSchema.parse,
   );
   return result.artifactId;
+}
+
+export async function cleanupCandidates(
+  credentials: RunnerCredentials,
+): Promise<WorktreeCleanupOutput> {
+  return apiRequest(
+    credentials,
+    '/api/v1/runners/me/worktree-cleanup',
+    {},
+    WorktreeCleanupOutputSchema.parse,
+  );
+}
+
+export async function reportCleanup(
+  credentials: RunnerCredentials,
+  input: {
+    attemptId: string;
+    status: 'cleaned' | 'missing' | 'skipped_dirty' | 'failed';
+    detail?: string;
+  },
+): Promise<void> {
+  const body = WorktreeCleanupReportInputSchema.parse(input);
+  await apiRequest(
+    credentials,
+    '/api/v1/runners/me/worktree-cleanup/report',
+    { method: 'POST', body: JSON.stringify(body) },
+    () => undefined,
+  );
 }

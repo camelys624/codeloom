@@ -112,6 +112,26 @@ export const RetryRunInputSchema = z.strictObject({
   initialPrompt: TextSchema.optional(),
 });
 export type RetryRunInput = z.infer<typeof RetryRunInputSchema>;
+export const WorktreeCleanupCandidateSchema = z.strictObject({
+  attemptId: IdSchema,
+  runId: IdSchema,
+  finishedAt: TimestampSchema,
+});
+export type WorktreeCleanupCandidate = z.infer<
+  typeof WorktreeCleanupCandidateSchema
+>;
+export const WorktreeCleanupOutputSchema = z.strictObject({
+  candidates: z.array(WorktreeCleanupCandidateSchema).max(1024),
+});
+export type WorktreeCleanupOutput = z.infer<typeof WorktreeCleanupOutputSchema>;
+export const WorktreeCleanupReportInputSchema = z.strictObject({
+  attemptId: IdSchema,
+  status: z.enum(['cleaned', 'missing', 'skipped_dirty', 'failed']),
+  detail: TextSchema.optional(),
+});
+export type WorktreeCleanupReportInput = z.infer<
+  typeof WorktreeCleanupReportInputSchema
+>;
 export const AttemptSnapshotSchema = AttemptSchema.extend({
   lastSequence: CursorSchema,
   lastChunkSeq: CursorSchema,
@@ -248,7 +268,12 @@ export type CreateRunnerOutput = z.infer<typeof CreateRunnerOutputSchema>;
 export const RunnerStatusOutputSchema = z.strictObject({
   runner: RunnerSchema,
   load: z.strictObject({ active: CountSchema, capacity: CountSchema }),
-  worktrees: z.strictObject({ active: CountSchema, capacity: CountSchema }),
+  worktrees: z.strictObject({
+    active: CountSchema,
+    capacity: CountSchema,
+    cleanupPending: CountSchema.default(0),
+    cleanupSkipped: CountSchema.default(0),
+  }),
   activeAttempts: z.array(AttemptSchema).max(1024),
   staleAttempts: z.array(AttemptSchema).max(1024),
 });

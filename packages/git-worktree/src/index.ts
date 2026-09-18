@@ -156,6 +156,27 @@ export async function commitAll(
   return head.stdout.trim();
 }
 
+export async function removeWorktree(
+  checkoutPath: string,
+  worktreePath: string,
+): Promise<boolean> {
+  try {
+    await access(worktreePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  const result = await runGit(
+    ['worktree', 'remove', '--', worktreePath],
+    checkoutPath,
+  );
+  if (result.code !== 0)
+    throw new Error(
+      `git worktree remove failed: ${result.stderr.trim() || result.stdout.trim()}`,
+    );
+  return true;
+}
+
 export async function unifiedDiff(
   worktreePath: string,
   baseCommitSha: string,

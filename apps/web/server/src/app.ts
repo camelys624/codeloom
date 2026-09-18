@@ -62,6 +62,8 @@ import {
   TranscriptArchivesOutputSchema,
   TranscriptQuerySchema,
   TranscriptFramesSchema,
+  WorktreeCleanupOutputSchema,
+  WorktreeCleanupReportInputSchema,
   TurnSchema,
   UpdateAgentProfileInputSchema,
   UpdateTaskInputSchema,
@@ -1447,6 +1449,51 @@ export async function buildApp(
     reply.send(result.rows.map(mapAgentProfile));
   });
 
+  app.get('/api/v1/runners/me/worktree-cleanup', async (request, reply) => {
+    const runner = await runnerContext(request as RequestWithRunner, reply);
+    if (!runner) return;
+    const result = await pool.query<Row>(
+      `SELECT id AS attempt_id, run_id, finished_at
+       FROM attempts
+       WHERE runner_id = $1 AND workspace_id = $2 AND status = 'completed'
+         AND finished_at <= now() - interval '14 days'
+       ORDER BY finished_at, id
+       LIMIT 1024`,
+      [runner.id, runner.workspaceId],
+    );
+    reply.send(
+      WorktreeCleanupOutputSchema.parse({
+        candidates: result.rows.map((row) => ({
+          attemptId: String(row.attempt_id),
+          runId: String(row.run_id),
+          finishedAt: iso(row.finished_at),
+        })),
+      }),
+    );
+  });
+
+  app.post(
+    '/api/v1/runners/me/worktree-cleanup/report',
+    async (request, reply) => {
+      const runner = await runnerContext(request as RequestWithRunner, reply);
+      if (!runner) return;
+      const body = parseBody(WorktreeCleanupReportInputSchema, request.body);
+      const attempt = await pool.query<Row>(
+        `SELECT id FROM attempts
+       WHERE id = $1 AND runner_id = $2 AND workspace_id = $3 AND status = 'completed'
+         AND finished_at <= now() - interval '14 days'`,
+        [body.attemptId, runner.id, runner.workspaceId],
+      );
+      if (!attempt.rows[0]) {
+        reply
+          .code(404)
+          .send(errorBody('not_found', 'Cleanup candidate not found'));
+        return;
+      }
+      reply.code(204).send();
+    },
+  );
+
   app.get('/api/v1/runners/:id/status', async (request, reply) => {
     const auth = await requireAuth(request as RequestWithAuth, reply);
     if (!auth) return;
@@ -1481,11 +1528,24 @@ export async function buildApp(
     const capacity = Number(runnerRow.max_concurrency);
     const activeAttempts = active.rows.map(mapAttempt);
     const staleAttempts = stale.rows.map(mapAttempt);
+    const cleanup = await pool.query<{ pending: string; skipped: string }>(
+      `SELECT
+         count(*) FILTER (WHERE status = 'completed' AND finished_at <= now() - interval '14 days')::text AS pending,
+         0::text AS skipped
+       FROM attempts
+       WHERE runner_id = $1 AND workspace_id = $2`,
+      [runnerId, auth.workspace.id],
+    );
     reply.send(
       RunnerStatusOutputSchema.parse({
         runner: mapRunner(runnerRow),
         load: { active: activeAttempts.length, capacity },
-        worktrees: { active: activeAttempts.length, capacity },
+        worktrees: {
+          active: activeAttempts.length,
+          capacity,
+          cleanupPending: Number(cleanup.rows[0]?.pending ?? 0),
+          cleanupSkipped: Number(cleanup.rows[0]?.skipped ?? 0),
+        },
         activeAttempts,
         staleAttempts,
       }),
