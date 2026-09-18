@@ -4,6 +4,7 @@ import {
   ApprovalDecisionSchema,
   ApprovalRequestSchema,
   ArtifactKindSchema,
+  ArtifactSchema,
   AttemptSchema,
   FrozenRunSpecSchema,
   RepositoryAccessSchema,
@@ -34,6 +35,7 @@ import {
   TimestampSchema,
   utf8ByteLength,
 } from './validation.js';
+
 export const PairRunnerInputSchema = z.strictObject({
   pairingCode: NameSchema,
   name: NameSchema,
@@ -59,8 +61,8 @@ export type RotateRunnerTokenOutput = z.infer<
   typeof RotateRunnerTokenOutputSchema
 >;
 export const RegisterRepositoryInputSchema = z.strictObject({
-  remoteUrl: TextSchema.nullable(),
   name: NameSchema,
+  remoteUrl: TextSchema.nullable(),
   defaultRef: NameSchema,
   access: RepositoryAccessSchema,
 });
@@ -154,6 +156,12 @@ export const TranscriptOutputSchema = z.strictObject({
   chunks: z.array(TranscriptChunkSchema).max(200),
 });
 export type TranscriptOutput = z.infer<typeof TranscriptOutputSchema>;
+export const TranscriptArchivesOutputSchema = z.strictObject({
+  archives: z.array(ArtifactSchema).max(1024),
+});
+export type TranscriptArchivesOutput = z.infer<
+  typeof TranscriptArchivesOutputSchema
+>;
 const queryCursor = z.union([
   CursorSchema,
   z

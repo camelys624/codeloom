@@ -59,6 +59,7 @@ import {
   RepositoryResolveRefSchema,
   TranscriptNackSchema,
   TranscriptOutputSchema,
+  TranscriptArchivesOutputSchema,
   TranscriptQuerySchema,
   TranscriptFramesSchema,
   TurnSchema,
@@ -105,8 +106,8 @@ import {
   mapUser,
   mapWorkspace,
 } from './mapping.js';
+import { archiveOldTranscripts } from './transcript-archive.js';
 import { collectMetrics, formatPrometheus } from './metrics.js';
-
 export interface ServerConfig {
   databaseUrl: string;
   sessionSecret: string;
@@ -164,6 +165,7 @@ const TOKEN_ROTATION_GRACE_MS = 60_000;
 const PAIRING_TTL_MS = 10 * 60_000;
 const AUTH_SESSION_MS = 14 * 24 * 60 * 60_000;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const TRANSCRIPT_ARCHIVE_INTERVAL_MS = 60 * 60_000;
 
 function envBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
@@ -312,6 +314,7 @@ export async function buildApp(
   let runnerMessagesTotal = 0;
   let eventNacksTotal = 0;
   let reaperTimer: NodeJS.Timeout | undefined;
+  let transcriptArchiveTimer: NodeJS.Timeout | undefined;
   let notificationClient: PoolClient | undefined;
 
   function browserSocketCount(): number {
@@ -1984,6 +1987,35 @@ export async function buildApp(
     reply.send(TranscriptOutputSchema.parse({ chunks }));
   });
 
+  app.get(
+    '/api/v1/attempts/:id/transcript-archives',
+    async (request, reply) => {
+      const auth = await requireAuth(request as RequestWithAuth, reply);
+      if (!auth) return;
+      const attemptId = String((request.params as { id: string }).id);
+      const attempt = await pool.query<Row>(
+        'SELECT 1 FROM attempts WHERE id = $1 AND workspace_id = $2',
+        [attemptId, auth.workspace.id],
+      );
+      if (!attempt.rows[0]) {
+        reply.code(404).send(errorBody('not_found', 'Attempt not found'));
+        return;
+      }
+      const result = await pool.query<Row>(
+        `SELECT * FROM artifacts
+       WHERE workspace_id = $1 AND attempt_id = $2 AND turn_id IS NULL
+         AND kind = 'log' AND mime_type = 'application/x.codeloom-transcript+jsonl'
+       ORDER BY created_at, id`,
+        [auth.workspace.id, attemptId],
+      );
+      reply.send(
+        TranscriptArchivesOutputSchema.parse({
+          archives: result.rows.map(mapArtifact),
+        }),
+      );
+    },
+  );
+
   app.post('/api/v1/attempts/:id/prompt', async (request, reply) => {
     const auth = await ensureWorkspace(request as RequestWithAuth, reply);
     if (!auth) return;
@@ -2769,10 +2801,16 @@ export async function buildApp(
         app.log.error(error, 'Attempt reaper failed'),
       );
     }, REAPER_INTERVAL_MS);
+    transcriptArchiveTimer = setInterval(() => {
+      void archiveOldTranscripts(pool, config.dataDir).catch((error) =>
+        app.log.error(error, 'Transcript archive failed'),
+      );
+    }, TRANSCRIPT_ARCHIVE_INTERVAL_MS);
   });
 
   app.addHook('onClose', async () => {
-    if (reaperTimer) clearInterval(reaperTimer);
+    clearInterval(reaperTimer);
+    clearInterval(transcriptArchiveTimer);
     if (notificationClient) notificationClient.release();
     for (const socket of runnerSockets.values()) await closeQuietly(socket);
     if (!options.pool) await pool.end();
