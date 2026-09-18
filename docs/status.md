@@ -1,11 +1,11 @@
 # 实现状态与交接
 
-- 日期：2026-09-17
+- 日期：2026-09-18
 - 对应文档：0.6 加 ADR-027；阶段 2 Run 体验增强
 - 用途：接手剩余工作的人从这里开始。本文只讲"做了什么、验到什么程度、还剩什么"，设计依据看各专题文档。
 
 ## 1. 一句话状态
-阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 已完成应用壳、Task 看板拖拽、Run 时间线/转写工具、累计 Diff 文件树和轻量语法高亮，并新增 Runner 状态与生命周期管理。服务端仍是 PostgreSQL 唯一事实，浏览器通过已有 Run 快照、事件、transcript 游标和新增 Runner 状态 REST 接口获取数据。
+阶段 1 Pi 真实 engine 与核心 Run 体验已验收；阶段 2 已完成应用壳、Task 看板拖拽、Run 时间线/转写工具、累计 Diff 文件树和轻量语法高亮，并新增 Runner 状态与生命周期管理、Prometheus 指标端点。服务端仍是 PostgreSQL 唯一事实，浏览器通过已有 Run 快照、事件、transcript 游标和新增 Runner 状态 REST 接口获取数据。
 
 ## 2. 已完成
 
@@ -82,6 +82,10 @@
 - Run 页新增时间线、转写搜索和下载工具、累计 Diff 文件树；事件与转写仍复用现有 `AttemptStream` 游标和重连补拉链路。
 - `apps/web/client/src/main.tsx` 的 Runner 页面现在展示在线状态、Load、Worktrees、最近心跳、Agent Profiles 和活跃/最近结束 Attempt，并提供排空、恢复领取、token 轮换和撤销操作；token 只通过一次性提示显示。
 - `GET /api/v1/runners/{id}/status` 返回契约化 Runner 状态、负载、worktree 占用、活跃 Attempt 和最近 24 小时已结束 Attempt；`POST /drain`、`POST /resume`、`POST /rotate-token` 补齐阶段二状态管理动作，排空状态在 Runner 重连 hello 时保留。
+- `GET /metrics`：Prometheus text format 指标端点，支持可选 `METRICS_TOKEN` Bearer 认证；指标覆盖 Runner、Attempt 状态、丢失、自动重试、领取延迟、事件延迟、转写、审批、Run 活动 Attempt 不变量、Runner nack 和浏览器连接。
+- `apps/web/server/src/metrics.ts` 与 `apps/web/server/test/metrics.test.ts`：指标 SQL 聚合、完整 status labels、格式化、数据库失败传播和进程内 Runner 计数测试；部署文档包含 Prometheus 告警表达式。
+- 验证：指标定向测试 4 个通过；`bun run typecheck`、`bun run build`、受影响文件 Prettier 检查通过。仓库级 `bun run format:check` 仍被既有 `AGENTS.md` 格式告警阻断，未格式化该规则文件。
+- 阶段 2 可观测性：指标端点与告警表达式已完成；转写归档、worktree 清理、Runner 单文件分发和混沌测试仍未完成。
 - 验证：`bun run typecheck`、`bun run build`、`bun run test`（14 个测试文件，43 个测试）、`bun run check:contracts`、`bun run format:check`、`git diff --check` 已通过。构建中的 Zod 注释告警和 chunk size 提示来自既有依赖/打包配置。
 
 ## 3. 未完成

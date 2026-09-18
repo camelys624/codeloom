@@ -1,4 +1,9 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -100,6 +105,7 @@ import {
   mapUser,
   mapWorkspace,
 } from './mapping.js';
+import { collectMetrics, formatPrometheus } from './metrics.js';
 
 export interface ServerConfig {
   databaseUrl: string;
@@ -111,6 +117,7 @@ export interface ServerConfig {
   serveStatic: boolean;
   trustProxy: boolean;
   nodeEnv: string;
+  metricsToken?: string;
 }
 
 export interface BuildAppOptions {
@@ -166,6 +173,7 @@ function envBoolean(value: string | undefined, fallback: boolean): boolean {
 function resolveConfig(input: Partial<ServerConfig> = {}): ServerConfig {
   const databaseUrl = input.databaseUrl ?? process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
+  const metricsToken = input.metricsToken ?? process.env.METRICS_TOKEN;
   return {
     databaseUrl,
     sessionSecret:
@@ -183,6 +191,7 @@ function resolveConfig(input: Partial<ServerConfig> = {}): ServerConfig {
       input.serveStatic ?? envBoolean(process.env.SERVE_STATIC, false),
     trustProxy: input.trustProxy ?? envBoolean(process.env.TRUST_PROXY, false),
     nodeEnv: input.nodeEnv ?? process.env.NODE_ENV ?? 'development',
+    metricsToken: metricsToken || undefined,
   };
 }
 
@@ -237,10 +246,16 @@ function runError(
   return { code, message, retryable };
 }
 
-function isRunnerRequest(request: FastifyRequest): boolean {
+function validMetricsToken(request: FastifyRequest, expected: string): boolean {
+  const supplied = request.headers.authorization?.startsWith('Bearer ')
+    ? request.headers.authorization.slice(7)
+    : undefined;
+  if (!supplied) return false;
+  const suppliedBytes = Buffer.from(supplied);
+  const expectedBytes = Buffer.from(expected);
   return (
-    typeof request.headers.authorization === 'string' &&
-    request.headers.authorization.startsWith('Bearer ')
+    suppliedBytes.length === expectedBytes.length &&
+    timingSafeEqual(suppliedBytes, expectedBytes)
   );
 }
 
@@ -290,11 +305,43 @@ export async function buildApp(
 
   const runnerSockets = new Map<string, WsLike>();
   const browserSubscriptions = new Map<string, Set<WsLike>>();
+  const browserSockets = new Set<WsLike>();
   const socketRunners = new Map<WsLike, string>();
   const socketSubscriptions = new Map<WsLike, string>();
   const pendingRepositoryRefs = new Map<string, PendingRepositoryRef>();
+  let runnerMessagesTotal = 0;
+  let eventNacksTotal = 0;
   let reaperTimer: NodeJS.Timeout | undefined;
   let notificationClient: PoolClient | undefined;
+
+  function browserSocketCount(): number {
+    return browserSockets.size;
+  }
+
+  app.get('/metrics', async (request, reply) => {
+    if (config.metricsToken) {
+      if (!validMetricsToken(request, config.metricsToken)) {
+        reply
+          .code(401)
+          .send(errorBody('unauthorized', 'Metrics token required'));
+        return;
+      }
+    } else if (!(await sessionContext(request))) {
+      reply
+        .code(401)
+        .send(errorBody('unauthorized', 'Authentication required'));
+      return;
+    }
+    const snapshot = await collectMetrics(
+      pool,
+      browserSocketCount(),
+      runnerMessagesTotal,
+      eventNacksTotal,
+    );
+    reply
+      .type('text/plain; version=0.0.4; charset=utf-8')
+      .send(formatPrometheus(snapshot));
+  });
 
   function broadcast(runId: string, message: BrowserServerMessage): void {
     const sockets = browserSubscriptions.get(runId);
@@ -2379,6 +2426,11 @@ export async function buildApp(
     ws.on('message', async (data) => {
       try {
         const message = RunnerMessageSchema.parse(JSON.parse(data.toString()));
+        if (
+          message.type === 'attempt.event' ||
+          message.type === 'attempt.transcript'
+        )
+          runnerMessagesTotal += 1;
         if (!helloReceived) {
           if (message.type !== 'runner.hello')
             throw new Error('runner.hello must be first');
@@ -2474,13 +2526,14 @@ export async function buildApp(
             break;
           case 'attempt.event': {
             const result = await processRunnerEvent(runner, message);
-            if (result.kind === 'stale')
+            if (result.kind === 'stale') {
               sendRunner(runner.id, {
                 type: 'attempt.stale',
                 attemptId: message.attemptId,
                 reason: 'Attempt is stale or not owned by this runner',
               });
-            else if (result.kind === 'nack')
+            } else if (result.kind === 'nack') {
+              eventNacksTotal += 1;
               ws.send(
                 JSON.stringify({
                   type: 'nack',
@@ -2489,7 +2542,7 @@ export async function buildApp(
                   expectedClientSeq: result.expectedClientSeq,
                 }),
               );
-            else
+            } else {
               ws.send(
                 JSON.stringify(
                   EventAckSchema.parse({
@@ -2500,17 +2553,19 @@ export async function buildApp(
                   }),
                 ),
               );
+            }
             break;
           }
           case 'attempt.transcript': {
             const result = await processTranscript(runner, message);
-            if (result.kind === 'stale')
+            if (result.kind === 'stale') {
               sendRunner(runner.id, {
                 type: 'attempt.stale',
                 attemptId: message.attemptId,
                 reason: 'Attempt is stale or not owned by this runner',
               });
-            else if (result.kind === 'nack')
+            } else if (result.kind === 'nack') {
+              eventNacksTotal += 1;
               ws.send(
                 JSON.stringify({
                   type: 'nack',
@@ -2519,7 +2574,7 @@ export async function buildApp(
                   expectedChunkSeq: result.expectedChunkSeq,
                 }),
               );
-            else
+            } else {
               ws.send(
                 JSON.stringify({
                   type: 'ack',
@@ -2528,6 +2583,7 @@ export async function buildApp(
                   chunkSeq: result.chunkSeq,
                 }),
               );
+            }
             break;
           }
         }
@@ -2563,6 +2619,7 @@ export async function buildApp(
       return;
     }
     const ws = socket as unknown as WsLike;
+    browserSockets.add(ws);
     ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString()) as {
@@ -2587,6 +2644,7 @@ export async function buildApp(
       }
     });
     ws.on('close', () => {
+      browserSockets.delete(ws);
       const runId = socketSubscriptions.get(ws);
       if (runId) browserSubscriptions.get(runId)?.delete(ws);
       socketSubscriptions.delete(ws);

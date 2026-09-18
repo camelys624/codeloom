@@ -52,7 +52,7 @@
 - Runner 状态页：负载、活跃 Attempt、stale 记录、worktree 占用；token 轮换 UI、Runner draining；**已完成**。
 - Runner 单文件分发评估（Node SEA 或 `bun build --compile`）；
 - 转写归档任务、worktree 清理任务；
-- `/metrics` 与告警规则；
+- `/metrics` 与告警规则：**指标端点与 Prometheus 告警表达式已完成**；
 - 混沌测试：随机杀 Runner、服务端、网络，验证不变量。
 
 ## 阶段 3：结果落地

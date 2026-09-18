@@ -6,7 +6,7 @@
     "outDir": "../dist/server",
     "tsBuildInfoFile": "../dist/server.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts"],
   "references": [
     { "path": "../../../packages/contracts" },
     { "path": "../../../packages/agent-adapters" },
