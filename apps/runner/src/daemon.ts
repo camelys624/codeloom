@@ -133,6 +133,7 @@ export class RunnerDaemon {
   private reconnectTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
   private claimTimer?: NodeJS.Timeout;
+  private cleanupTimer?: NodeJS.Timeout;
   private readonly stateWrites = new Map<string, Promise<void>>();
 
   constructor(private readonly options: RunnerDaemonOptions) {
@@ -148,6 +149,10 @@ export class RunnerDaemon {
     await this.cleanupCompletedWorktrees();
     await this.connect();
     this.claimTimer = setInterval(() => void this.claimAvailable(), 30_000);
+    this.cleanupTimer = setInterval(
+      () => void this.cleanupCompletedWorktrees(),
+      60 * 60_000,
+    );
   }
 
   private async refreshProfiles(): Promise<void> {
@@ -232,6 +237,7 @@ export class RunnerDaemon {
     clearTimeout(this.reconnectTimer);
     clearInterval(this.heartbeatTimer);
     clearInterval(this.claimTimer);
+    clearInterval(this.cleanupTimer);
     for (const attempt of this.active.values()) {
       attempt.stop = true;
       await attempt.session?.close();

@@ -1457,6 +1457,7 @@ export async function buildApp(
        FROM attempts
        WHERE runner_id = $1 AND workspace_id = $2 AND status = 'completed'
          AND finished_at <= now() - interval '14 days'
+         AND cleanup_status IS DISTINCT FROM 'cleaned'
        ORDER BY finished_at, id
        LIMIT 1024`,
       [runner.id, runner.workspaceId],
@@ -1480,8 +1481,8 @@ export async function buildApp(
       const body = parseBody(WorktreeCleanupReportInputSchema, request.body);
       const attempt = await pool.query<Row>(
         `SELECT id FROM attempts
-       WHERE id = $1 AND runner_id = $2 AND workspace_id = $3 AND status = 'completed'
-         AND finished_at <= now() - interval '14 days'`,
+         WHERE id = $1 AND runner_id = $2 AND workspace_id = $3 AND status = 'completed'
+           AND finished_at <= now() - interval '14 days'`,
         [body.attemptId, runner.id, runner.workspaceId],
       );
       if (!attempt.rows[0]) {
@@ -1490,6 +1491,12 @@ export async function buildApp(
           .send(errorBody('not_found', 'Cleanup candidate not found'));
         return;
       }
+      await pool.query(
+        `UPDATE attempts
+         SET cleanup_status = $2, cleanup_detail = $3, cleanup_reported_at = now()
+         WHERE id = $1`,
+        [body.attemptId, body.status, body.detail ?? null],
+      );
       reply.code(204).send();
     },
   );
@@ -1530,8 +1537,8 @@ export async function buildApp(
     const staleAttempts = stale.rows.map(mapAttempt);
     const cleanup = await pool.query<{ pending: string; skipped: string }>(
       `SELECT
-         count(*) FILTER (WHERE status = 'completed' AND finished_at <= now() - interval '14 days')::text AS pending,
-         0::text AS skipped
+         count(*) FILTER (WHERE status = 'completed' AND finished_at <= now() - interval '14 days' AND cleanup_status IS DISTINCT FROM 'cleaned')::text AS pending,
+         count(*) FILTER (WHERE cleanup_status = 'skipped_dirty')::text AS skipped
        FROM attempts
        WHERE runner_id = $1 AND workspace_id = $2`,
       [runnerId, auth.workspace.id],

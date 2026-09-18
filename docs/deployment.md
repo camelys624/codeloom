@@ -324,6 +324,13 @@ groups:
 - contracts 包版本与服务端一起发布，Runner 依赖它的 N 或 N-1；
 - 发布前：类型检查、单元测试、集成测试（testcontainers PostgreSQL + fake adapter）、静态托管的缓存头与 SPA fallback 检查；阶段 4 起再加代理层的两个 WebSocket upgrade 检查。
 
+### 阶段 2 Runner 发布前检查
+
+- 单文件产物分别针对 Linux x64、Darwin arm64、Windows x64 构建；每个目标平台必须在原生主机运行 `status`、`connect`、`repo add` 和 daemon WebSocket smoke。
+- 发布产物保存 SHA-256 checksum；代码签名和自动更新不由阶段 2 服务端实现。
+- Worktree 清理由 Runner 启动时及每小时执行；清理只作用于服务端明确返回的已完成 Attempt，检查无未提交改动后调用 `git worktree remove`，结果回报服务端并显示在 Runner 状态页。
+- 长时混沌验收需要随机杀 Runner、服务端、网络并观察 24 小时不变量；当前仓库已覆盖确定性与随机乱序单元场景，发布前仍需环境级演练。
+
 ## 10. 阶段 5 之前不做
 
 Kubernetes、多实例、对象存储、CDN、云端 Worker。反向代理与 TLS 在阶段 4。协议和数据模型已为多实例留好口子（`LISTEN/NOTIFY`、无本地状态），到时只加不改。
