@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, rm } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { WebSocket } from 'ws';
 import {
   AgentCapabilitiesSchema,
@@ -34,10 +34,18 @@ import {
   commitAll,
   createWorktree,
   diffStats,
+  git,
+  removeWorktree,
   resolveCommit,
   unifiedDiff,
 } from '@agent-workspace/git-worktree';
-import { claim, profiles, uploadArtifact } from './http.js';
+import {
+  cleanupCandidates,
+  claim,
+  profiles,
+  reportCleanup,
+  uploadArtifact,
+} from './http.js';
 import { Outbox } from './outbox.js';
 import {
   attemptStatePath,
@@ -125,6 +133,7 @@ export class RunnerDaemon {
   private reconnectTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
   private claimTimer?: NodeJS.Timeout;
+  private cleanupTimer?: NodeJS.Timeout;
   private readonly stateWrites = new Map<string, Promise<void>>();
 
   constructor(private readonly options: RunnerDaemonOptions) {
@@ -136,16 +145,87 @@ export class RunnerDaemon {
     await mkdir(this.files.worktrees, { recursive: true, mode: 0o700 });
     this.repositories = await loadRepositories(this.files);
     await this.outbox.init();
-    await this.loadRestartedAttempts();
     await this.refreshProfiles();
+    await this.cleanupCompletedWorktrees();
     await this.connect();
     this.claimTimer = setInterval(() => void this.claimAvailable(), 30_000);
+    this.cleanupTimer = setInterval(
+      () => void this.cleanupCompletedWorktrees(),
+      60 * 60_000,
+    );
   }
 
   private async refreshProfiles(): Promise<void> {
     const current = await profiles(this.options.credentials);
     this.profiles.clear();
     for (const profile of current) this.profiles.set(profile.id, profile);
+  }
+
+  private async cleanupCompletedWorktrees(): Promise<void> {
+    let candidates;
+    try {
+      candidates = await cleanupCandidates(this.options.credentials);
+    } catch {
+      return;
+    }
+    for (const candidate of candidates.candidates) {
+      const worktreePath = join(this.files.worktrees, candidate.attemptId);
+      let status: 'cleaned' | 'missing' | 'skipped_dirty' | 'failed';
+      let detail: string | undefined;
+      try {
+        if (!isRunnerWorktree(this.files.worktrees, worktreePath))
+          throw new Error('Cleanup candidate is outside Runner worktree root');
+        try {
+          await access(worktreePath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            status = 'missing';
+            await reportCleanup(this.options.credentials, {
+              attemptId: candidate.attemptId,
+              status,
+            }).catch(() => undefined);
+            continue;
+          }
+          throw error;
+        }
+        const clean = await git(worktreePath, ['status', '--porcelain']);
+        if (clean.code !== 0) throw new Error(clean.stderr.trim());
+        if (clean.stdout.trim()) {
+          status = 'skipped_dirty';
+          detail = 'Worktree contains uncommitted changes';
+        } else {
+          let repository: LocalRepository | undefined;
+          const expectedPath = resolve(worktreePath);
+          for (const candidateRepository of this.repositories) {
+            const listed = await git(candidateRepository.path, [
+              'worktree',
+              'list',
+              '--porcelain',
+            ]);
+            if (listed.code !== 0) continue;
+            const paths = listed.stdout
+              .split('\n')
+              .filter((line) => line.startsWith('worktree '))
+              .map((line) => resolve(line.slice('worktree '.length)));
+            if (paths.includes(expectedPath)) {
+              repository = candidateRepository;
+              break;
+            }
+          }
+          if (!repository) throw new Error('Repository for worktree not found');
+          await removeWorktree(repository.path, worktreePath);
+          status = 'cleaned';
+        }
+      } catch (error) {
+        status = 'failed';
+        detail = error instanceof Error ? error.message : 'Cleanup failed';
+      }
+      await reportCleanup(this.options.credentials, {
+        attemptId: candidate.attemptId,
+        status,
+        ...(detail ? { detail } : {}),
+      }).catch(() => undefined);
+    }
   }
 
   private startHeartbeat(): void {
@@ -157,6 +237,7 @@ export class RunnerDaemon {
     clearTimeout(this.reconnectTimer);
     clearInterval(this.heartbeatTimer);
     clearInterval(this.claimTimer);
+    clearInterval(this.cleanupTimer);
     for (const attempt of this.active.values()) {
       attempt.stop = true;
       await attempt.session?.close();

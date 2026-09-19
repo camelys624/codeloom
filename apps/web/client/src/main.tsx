@@ -1597,11 +1597,14 @@ function RunnerCard({
           </strong>
         </div>
         <div>
-          <span className="muted small">Worktrees</span>
           <strong>
             {data?.worktrees.active ?? '—'} /{' '}
             {data?.worktrees.capacity ?? runner.maxConcurrency}
           </strong>
+          <span className="muted small">
+            cleanup {data?.worktrees.cleanupPending ?? 0} pending ·{' '}
+            {data?.worktrees.cleanupSkipped ?? 0} skipped
+          </span>
         </div>
         <div>
           <span className="muted small">Last seen</span>

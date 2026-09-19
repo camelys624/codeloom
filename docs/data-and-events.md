@@ -199,8 +199,9 @@ ws/<workspaceId>/run/<runId>/att/<attemptId>/log/<artifactId>
 
 ## 8. 保留与清理
 
-- `transcript_chunks`：默认保留 180 天，之后按 Attempt 打包为 `log` artifact 并删除行（阶段 2 实现）；
-- worktree：Run `completed` 后 14 天由 Runner 清理，清理前检查 worktree 是否有未提交改动，有则跳过并在 status 中提示；`failed`、`lost`、`canceled` 的 worktree 不自动清理；
+- `transcript_chunks`：默认保留 180 天；服务端每小时按 Attempt 把超过保留期的块打包为 `log` artifact，MIME 为 `application/x.codeloom-transcript+jsonl`，归档头声明 workspace、Run、Attempt 和格式版本，成功创建 artifact 后删除对应行；单个 artifact 最大 50 MB，超过时分批归档。
+- 归档通过 `GET /api/v1/attempts/{id}/transcript-archives` 查询，原始 artifact 下载仍使用现有 artifact 下载接口。
+- worktree：Run `completed` 后 14 天由 Runner 启动时和每小时清理任务检查；先确认工作区无未提交改动，再执行 `git worktree remove`。结果写入 Attempt 的 `cleanup_status`，脏 worktree 标记 `skipped_dirty` 并保留；`failed`、`lost`、`canceled` 的 worktree 不自动清理；
 - 用户注册的原始 checkout 永远不是清理目标；
 - `runner_pairing_codes`：过期 1 天后删除；
 - `sessions`：过期后删除。

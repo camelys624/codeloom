@@ -209,8 +209,11 @@ DATA_DIR=/data
 SESSION_SECRET=…                          # 32 字节以上随机
 SERVE_STATIC=true                         # 托管 dist/client；开发环境 false
 TRUST_PROXY=false                         # 只在反向代理后面设 true
+METRICS_TOKEN=…                           # 可选；设置后 /metrics 要求 Bearer token
 LOG_LEVEL=info
 ```
+
+`/metrics` 暴露 Prometheus text format 指标。默认不要求认证，适合只绑定内网或由前置网络策略保护的部署；公网或不可信网络部署应设置 `METRICS_TOKEN`，抓取请求使用 `Authorization: Bearer <METRICS_TOKEN>`。指标查询只读数据库，不写入业务状态。
 
 所有 secret 从环境注入，不提交 `.env`。前端 bundle 不包含任何 secret；`VITE_*` 变量只能放公开配置，前端通过同源路径访问 API。
 
@@ -268,7 +271,7 @@ WantedBy=default.target
 
 ## 8. 监控
 
-阶段 1 暴露 `/metrics`（Prometheus 格式）：
+阶段 1 暴露 `/metrics`（Prometheus text format）。默认不要求应用层认证，因此生产环境应通过内网、反向代理访问控制或设置 `METRICS_TOKEN` 保护；设置 token 后，Prometheus 使用 `Authorization: Bearer <token>` 抓取。当前指标包括：
 
 ```text
 aw_runners_online
@@ -279,10 +282,37 @@ aw_claim_latency_seconds
 aw_event_ingest_lag_seconds
 aw_transcript_chunks_total
 aw_approvals_pending
+aw_runs_with_multiple_active_attempts
+aw_runner_messages_total
+aw_event_nacks_total
 aw_ws_clients
 ```
 
-阶段 4 起代理层额外监控 5xx、WebSocket upgrade 失败、上游连接失败与证书到期天数。告警：`lost` 突增；同一 Run 出现多个非终态 Attempt（不变量被破坏）；事件 nack 比例升高；`approvals_pending` 长时间不降。
+`aw_claim_latency_seconds` 是最近 24 小时已领取 Attempt 从创建到领取的平均秒数；`aw_event_ingest_lag_seconds` 是最近 5 分钟事件写入时间减事件发生时间的最大值；`aw_runs_with_multiple_active_attempts` 是违反单个 Run 单个活动 Attempt 不变量的 Run 数量；`aw_runner_messages_total` 和 `aw_event_nacks_total` 是当前服务进程生命周期内的 Runner WebSocket 计数。数据库查询异常时 endpoint 返回 500，不返回伪造的零值。
+
+Prometheus 告警规则可直接使用以下表达式：
+
+```yaml
+groups:
+  - name: codeloom
+    rules:
+      - alert: CodeloomRunAttemptInvariantViolation
+        expr: aw_runs_with_multiple_active_attempts > 0
+        for: 1m
+        labels: { severity: critical }
+      - alert: CodeloomEventNacksIncreasing
+        expr: increase(aw_event_nacks_total[10m]) > 0
+        for: 5m
+        labels: { severity: warning }
+      - alert: CodeloomAttemptsLostIncreasing
+        expr: increase(aw_attempts_lost_total[10m]) > 0
+        for: 5m
+        labels: { severity: warning }
+      - alert: CodeloomApprovalsStuck
+        expr: aw_approvals_pending > 0 and increase(aw_event_nacks_total[30m]) == 0
+        for: 30m
+        labels: { severity: warning }
+```
 
 ## 9. 版本与兼容
 
@@ -293,6 +323,13 @@ aw_ws_clients
 - 数据库迁移向后兼容一个服务端版本，先加列再切换再删列；
 - contracts 包版本与服务端一起发布，Runner 依赖它的 N 或 N-1；
 - 发布前：类型检查、单元测试、集成测试（testcontainers PostgreSQL + fake adapter）、静态托管的缓存头与 SPA fallback 检查；阶段 4 起再加代理层的两个 WebSocket upgrade 检查。
+
+### 阶段 2 Runner 发布前检查
+
+- 单文件产物分别针对 Linux x64、Darwin arm64、Windows x64 构建；每个目标平台必须在原生主机运行 `status`、`connect`、`repo add` 和 daemon WebSocket smoke。
+- 发布产物保存 SHA-256 checksum；代码签名和自动更新不由阶段 2 服务端实现。
+- Worktree 清理由 Runner 启动时及每小时执行；清理只作用于服务端明确返回的已完成 Attempt，检查无未提交改动后调用 `git worktree remove`，结果回报服务端并显示在 Runner 状态页。
+- 长时混沌验收需要随机杀 Runner、服务端、网络并观察 24 小时不变量；当前仓库已覆盖确定性与随机乱序单元场景，发布前仍需环境级演练。
 
 ## 10. 阶段 5 之前不做
 

@@ -1,4 +1,9 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -54,8 +59,11 @@ import {
   RepositoryResolveRefSchema,
   TranscriptNackSchema,
   TranscriptOutputSchema,
+  TranscriptArchivesOutputSchema,
   TranscriptQuerySchema,
   TranscriptFramesSchema,
+  WorktreeCleanupOutputSchema,
+  WorktreeCleanupReportInputSchema,
   TurnSchema,
   UpdateAgentProfileInputSchema,
   UpdateTaskInputSchema,
@@ -100,7 +108,8 @@ import {
   mapUser,
   mapWorkspace,
 } from './mapping.js';
-
+import { archiveOldTranscripts } from './transcript-archive.js';
+import { collectMetrics, formatPrometheus } from './metrics.js';
 export interface ServerConfig {
   databaseUrl: string;
   sessionSecret: string;
@@ -111,6 +120,7 @@ export interface ServerConfig {
   serveStatic: boolean;
   trustProxy: boolean;
   nodeEnv: string;
+  metricsToken?: string;
 }
 
 export interface BuildAppOptions {
@@ -157,6 +167,7 @@ const TOKEN_ROTATION_GRACE_MS = 60_000;
 const PAIRING_TTL_MS = 10 * 60_000;
 const AUTH_SESSION_MS = 14 * 24 * 60 * 60_000;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const TRANSCRIPT_ARCHIVE_INTERVAL_MS = 60 * 60_000;
 
 function envBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
@@ -166,6 +177,7 @@ function envBoolean(value: string | undefined, fallback: boolean): boolean {
 function resolveConfig(input: Partial<ServerConfig> = {}): ServerConfig {
   const databaseUrl = input.databaseUrl ?? process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
+  const metricsToken = input.metricsToken ?? process.env.METRICS_TOKEN;
   return {
     databaseUrl,
     sessionSecret:
@@ -183,6 +195,7 @@ function resolveConfig(input: Partial<ServerConfig> = {}): ServerConfig {
       input.serveStatic ?? envBoolean(process.env.SERVE_STATIC, false),
     trustProxy: input.trustProxy ?? envBoolean(process.env.TRUST_PROXY, false),
     nodeEnv: input.nodeEnv ?? process.env.NODE_ENV ?? 'development',
+    metricsToken: metricsToken || undefined,
   };
 }
 
@@ -237,10 +250,16 @@ function runError(
   return { code, message, retryable };
 }
 
-function isRunnerRequest(request: FastifyRequest): boolean {
+function validMetricsToken(request: FastifyRequest, expected: string): boolean {
+  const supplied = request.headers.authorization?.startsWith('Bearer ')
+    ? request.headers.authorization.slice(7)
+    : undefined;
+  if (!supplied) return false;
+  const suppliedBytes = Buffer.from(supplied);
+  const expectedBytes = Buffer.from(expected);
   return (
-    typeof request.headers.authorization === 'string' &&
-    request.headers.authorization.startsWith('Bearer ')
+    suppliedBytes.length === expectedBytes.length &&
+    timingSafeEqual(suppliedBytes, expectedBytes)
   );
 }
 
@@ -290,11 +309,44 @@ export async function buildApp(
 
   const runnerSockets = new Map<string, WsLike>();
   const browserSubscriptions = new Map<string, Set<WsLike>>();
+  const browserSockets = new Set<WsLike>();
   const socketRunners = new Map<WsLike, string>();
   const socketSubscriptions = new Map<WsLike, string>();
   const pendingRepositoryRefs = new Map<string, PendingRepositoryRef>();
+  let runnerMessagesTotal = 0;
+  let eventNacksTotal = 0;
   let reaperTimer: NodeJS.Timeout | undefined;
+  let transcriptArchiveTimer: NodeJS.Timeout | undefined;
   let notificationClient: PoolClient | undefined;
+
+  function browserSocketCount(): number {
+    return browserSockets.size;
+  }
+
+  app.get('/metrics', async (request, reply) => {
+    if (config.metricsToken) {
+      if (!validMetricsToken(request, config.metricsToken)) {
+        reply
+          .code(401)
+          .send(errorBody('unauthorized', 'Metrics token required'));
+        return;
+      }
+    } else if (!(await sessionContext(request))) {
+      reply
+        .code(401)
+        .send(errorBody('unauthorized', 'Authentication required'));
+      return;
+    }
+    const snapshot = await collectMetrics(
+      pool,
+      browserSocketCount(),
+      runnerMessagesTotal,
+      eventNacksTotal,
+    );
+    reply
+      .type('text/plain; version=0.0.4; charset=utf-8')
+      .send(formatPrometheus(snapshot));
+  });
 
   function broadcast(runId: string, message: BrowserServerMessage): void {
     const sockets = browserSubscriptions.get(runId);
@@ -1397,6 +1449,58 @@ export async function buildApp(
     reply.send(result.rows.map(mapAgentProfile));
   });
 
+  app.get('/api/v1/runners/me/worktree-cleanup', async (request, reply) => {
+    const runner = await runnerContext(request as RequestWithRunner, reply);
+    if (!runner) return;
+    const result = await pool.query<Row>(
+      `SELECT id AS attempt_id, run_id, finished_at
+       FROM attempts
+       WHERE runner_id = $1 AND workspace_id = $2 AND status = 'completed'
+         AND finished_at <= now() - interval '14 days'
+         AND cleanup_status IS DISTINCT FROM 'cleaned'
+       ORDER BY finished_at, id
+       LIMIT 1024`,
+      [runner.id, runner.workspaceId],
+    );
+    reply.send(
+      WorktreeCleanupOutputSchema.parse({
+        candidates: result.rows.map((row) => ({
+          attemptId: String(row.attempt_id),
+          runId: String(row.run_id),
+          finishedAt: iso(row.finished_at),
+        })),
+      }),
+    );
+  });
+
+  app.post(
+    '/api/v1/runners/me/worktree-cleanup/report',
+    async (request, reply) => {
+      const runner = await runnerContext(request as RequestWithRunner, reply);
+      if (!runner) return;
+      const body = parseBody(WorktreeCleanupReportInputSchema, request.body);
+      const attempt = await pool.query<Row>(
+        `SELECT id FROM attempts
+         WHERE id = $1 AND runner_id = $2 AND workspace_id = $3 AND status = 'completed'
+           AND finished_at <= now() - interval '14 days'`,
+        [body.attemptId, runner.id, runner.workspaceId],
+      );
+      if (!attempt.rows[0]) {
+        reply
+          .code(404)
+          .send(errorBody('not_found', 'Cleanup candidate not found'));
+        return;
+      }
+      await pool.query(
+        `UPDATE attempts
+         SET cleanup_status = $2, cleanup_detail = $3, cleanup_reported_at = now()
+         WHERE id = $1`,
+        [body.attemptId, body.status, body.detail ?? null],
+      );
+      reply.code(204).send();
+    },
+  );
+
   app.get('/api/v1/runners/:id/status', async (request, reply) => {
     const auth = await requireAuth(request as RequestWithAuth, reply);
     if (!auth) return;
@@ -1431,11 +1535,24 @@ export async function buildApp(
     const capacity = Number(runnerRow.max_concurrency);
     const activeAttempts = active.rows.map(mapAttempt);
     const staleAttempts = stale.rows.map(mapAttempt);
+    const cleanup = await pool.query<{ pending: string; skipped: string }>(
+      `SELECT
+         count(*) FILTER (WHERE status = 'completed' AND finished_at <= now() - interval '14 days' AND cleanup_status IS DISTINCT FROM 'cleaned')::text AS pending,
+         count(*) FILTER (WHERE cleanup_status = 'skipped_dirty')::text AS skipped
+       FROM attempts
+       WHERE runner_id = $1 AND workspace_id = $2`,
+      [runnerId, auth.workspace.id],
+    );
     reply.send(
       RunnerStatusOutputSchema.parse({
         runner: mapRunner(runnerRow),
         load: { active: activeAttempts.length, capacity },
-        worktrees: { active: activeAttempts.length, capacity },
+        worktrees: {
+          active: activeAttempts.length,
+          capacity,
+          cleanupPending: Number(cleanup.rows[0]?.pending ?? 0),
+          cleanupSkipped: Number(cleanup.rows[0]?.skipped ?? 0),
+        },
         activeAttempts,
         staleAttempts,
       }),
@@ -1942,6 +2059,35 @@ export async function buildApp(
     reply.send(TranscriptOutputSchema.parse({ chunks }));
   });
 
+  app.get(
+    '/api/v1/attempts/:id/transcript-archives',
+    async (request, reply) => {
+      const auth = await requireAuth(request as RequestWithAuth, reply);
+      if (!auth) return;
+      const attemptId = String((request.params as { id: string }).id);
+      const attempt = await pool.query<Row>(
+        'SELECT 1 FROM attempts WHERE id = $1 AND workspace_id = $2',
+        [attemptId, auth.workspace.id],
+      );
+      if (!attempt.rows[0]) {
+        reply.code(404).send(errorBody('not_found', 'Attempt not found'));
+        return;
+      }
+      const result = await pool.query<Row>(
+        `SELECT * FROM artifacts
+       WHERE workspace_id = $1 AND attempt_id = $2 AND turn_id IS NULL
+         AND kind = 'log' AND mime_type = 'application/x.codeloom-transcript+jsonl'
+       ORDER BY created_at, id`,
+        [auth.workspace.id, attemptId],
+      );
+      reply.send(
+        TranscriptArchivesOutputSchema.parse({
+          archives: result.rows.map(mapArtifact),
+        }),
+      );
+    },
+  );
+
   app.post('/api/v1/attempts/:id/prompt', async (request, reply) => {
     const auth = await ensureWorkspace(request as RequestWithAuth, reply);
     if (!auth) return;
@@ -2384,6 +2530,11 @@ export async function buildApp(
     ws.on('message', async (data) => {
       try {
         const message = RunnerMessageSchema.parse(JSON.parse(data.toString()));
+        if (
+          message.type === 'attempt.event' ||
+          message.type === 'attempt.transcript'
+        )
+          runnerMessagesTotal += 1;
         if (!helloReceived) {
           if (message.type !== 'runner.hello')
             throw new Error('runner.hello must be first');
@@ -2479,13 +2630,14 @@ export async function buildApp(
             break;
           case 'attempt.event': {
             const result = await processRunnerEvent(runner, message);
-            if (result.kind === 'stale')
+            if (result.kind === 'stale') {
               sendRunner(runner.id, {
                 type: 'attempt.stale',
                 attemptId: message.attemptId,
                 reason: 'Attempt is stale or not owned by this runner',
               });
-            else if (result.kind === 'nack')
+            } else if (result.kind === 'nack') {
+              eventNacksTotal += 1;
               ws.send(
                 JSON.stringify({
                   type: 'nack',
@@ -2494,7 +2646,7 @@ export async function buildApp(
                   expectedClientSeq: result.expectedClientSeq,
                 }),
               );
-            else
+            } else {
               ws.send(
                 JSON.stringify(
                   EventAckSchema.parse({
@@ -2505,17 +2657,19 @@ export async function buildApp(
                   }),
                 ),
               );
+            }
             break;
           }
           case 'attempt.transcript': {
             const result = await processTranscript(runner, message);
-            if (result.kind === 'stale')
+            if (result.kind === 'stale') {
               sendRunner(runner.id, {
                 type: 'attempt.stale',
                 attemptId: message.attemptId,
                 reason: 'Attempt is stale or not owned by this runner',
               });
-            else if (result.kind === 'nack')
+            } else if (result.kind === 'nack') {
+              eventNacksTotal += 1;
               ws.send(
                 JSON.stringify({
                   type: 'nack',
@@ -2524,7 +2678,7 @@ export async function buildApp(
                   expectedChunkSeq: result.expectedChunkSeq,
                 }),
               );
-            else
+            } else {
               ws.send(
                 JSON.stringify({
                   type: 'ack',
@@ -2533,6 +2687,7 @@ export async function buildApp(
                   chunkSeq: result.chunkSeq,
                 }),
               );
+            }
             break;
           }
         }
@@ -2568,6 +2723,7 @@ export async function buildApp(
       return;
     }
     const ws = socket as unknown as WsLike;
+    browserSockets.add(ws);
     ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString()) as {
@@ -2592,6 +2748,7 @@ export async function buildApp(
       }
     });
     ws.on('close', () => {
+      browserSockets.delete(ws);
       const runId = socketSubscriptions.get(ws);
       if (runId) browserSubscriptions.get(runId)?.delete(ws);
       socketSubscriptions.delete(ws);
@@ -2716,10 +2873,16 @@ export async function buildApp(
         app.log.error(error, 'Attempt reaper failed'),
       );
     }, REAPER_INTERVAL_MS);
+    transcriptArchiveTimer = setInterval(() => {
+      void archiveOldTranscripts(pool, config.dataDir).catch((error) =>
+        app.log.error(error, 'Transcript archive failed'),
+      );
+    }, TRANSCRIPT_ARCHIVE_INTERVAL_MS);
   });
 
   app.addHook('onClose', async () => {
-    if (reaperTimer) clearInterval(reaperTimer);
+    clearInterval(reaperTimer);
+    clearInterval(transcriptArchiveTimer);
     if (notificationClient) notificationClient.release();
     for (const socket of runnerSockets.values()) await closeQuietly(socket);
     if (!options.pool) await pool.end();
