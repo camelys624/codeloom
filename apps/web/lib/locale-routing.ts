@@ -1,3 +1,4 @@
+// Modified for Codeloom: allow a runtime web default without overriding explicit locale choices.
 import {
   matchLocale,
   SUPPORTED_LOCALES,
@@ -16,12 +17,18 @@ export function isSupportedLocale(
 }
 
 export function resolveLocaleFromSignals({
-  cookieLocale,
+  cookieLocale = null,
+  defaultLocale = null,
   acceptLanguage,
 }: {
   cookieLocale?: string | null;
+  defaultLocale?: string | null;
   acceptLanguage?: string | null;
 }): SupportedLocale {
+  if (isSupportedLocale(defaultLocale)) {
+    return isSupportedLocale(cookieLocale) ? cookieLocale : defaultLocale;
+  }
+
   const candidates: string[] = [];
   if (cookieLocale) candidates.push(cookieLocale);
 

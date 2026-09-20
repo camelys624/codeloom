@@ -20,6 +20,8 @@ dist-electron
 # env
 .env*
 !.env.example
+# Codeloom modification of Multica v0.5.0: track only the secret-free team template.
+!.env.codeloom.example
 # Desktop production config is public (backend URL, etc.) — track it so
 # `pnpm package` produces a release-ready build without extra setup.
 !apps/desktop/.env.production

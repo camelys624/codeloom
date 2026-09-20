@@ -1,3 +1,32 @@
+<!-- Modified for Codeloom: internal deployment and upstream provenance. -->
+## Codeloom internal development
+
+This repository now develops Codeloom on [Multica](https://github.com/multica-ai/multica),
+pinned to **v0.5.0**, commit `2df765a3c8f39789c9fb76316378bcffc20d22d9`.
+Codeloom is the internal project name, not a replacement for Multica's UI branding.
+The complete upstream license, notices, product name, and logos remain in place.
+
+Use the [Codeloom deployment instructions](SELF_HOSTING.md#codeloom-internal-deployment),
+not the upstream cloud installer below. Our overlay builds this checkout, uses separate
+`codeloom` containers/volumes, restricts signup to team emails, disables telemetry, and
+defaults the web UI to Simplified Chinese while preserving user preferences.
+
+The former Codeloom implementation remains in Git history at `076dd49`.
+Its database, Runner credentials, Task/Run/Attempt/Turn model, and human tool approvals
+are **not migrated or emulated**. Multica daemons automatically approve agent tools and
+run with their OS user's permissions; use dedicated users or isolated machines.
+Do not point this deployment at the old database or reuse its secrets.
+
+Upstream history is preserved for future merges. `origin` remains the Codeloom repository;
+`upstream` is Multica. Upgrade through a dedicated branch/worktree from `main`,
+merge an explicitly selected upstream release, and verify login, locale selection,
+daemon connectivity, execution, and recovery before integration. Upstream release
+publishing is disabled outside the canonical Multica repository.
+
+Internal use within one organization is allowed under the [Multica License](LICENSE).
+Third-party hosting and UI rebranding require the separate permissions described there.
+The upstream introduction follows.
+
 <div align="center">
 
 <picture>

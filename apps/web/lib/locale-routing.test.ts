@@ -1,3 +1,4 @@
+// Modified for Codeloom: cover runtime default precedence and unchanged upstream fallbacks.
 import { describe, expect, it } from "vitest";
 import {
   isSupportedLocale,
@@ -29,6 +30,63 @@ describe("locale routing", () => {
         cookieLocale: "en",
         acceptLanguage: "zh-CN,zh;q=0.9",
       }),
+    ).toBe("en");
+  });
+
+  it("prefers an explicit cookie over the configured locale and browser", () => {
+    expect(
+      resolveLocaleFromSignals({
+        cookieLocale: "en",
+        defaultLocale: "zh-Hans",
+        acceptLanguage: "ja-JP",
+      }),
+    ).toBe("en");
+  });
+
+  it("prefers the configured locale over browser negotiation", () => {
+    expect(
+      resolveLocaleFromSignals({
+        defaultLocale: "zh-Hans",
+        acceptLanguage: "en-US",
+      }),
+    ).toBe("zh-Hans");
+  });
+
+  it("ignores unsupported cookies when a valid default is configured", () => {
+    expect(
+      resolveLocaleFromSignals({
+        cookieLocale: "not_a_locale",
+        defaultLocale: "zh-Hans",
+        acceptLanguage: "en-US",
+      }),
+    ).toBe("zh-Hans");
+  });
+
+  it.each(["zh-CN", "not_a_locale", ""])(
+    "preserves browser negotiation when the configured locale is invalid: %s",
+    (defaultLocale) => {
+      expect(
+        resolveLocaleFromSignals({
+          defaultLocale,
+          acceptLanguage: "ja-JP",
+        }),
+      ).toBe("ja");
+    },
+  );
+
+  it("preserves legacy cookie matching when the configured locale is invalid", () => {
+    expect(
+      resolveLocaleFromSignals({
+        cookieLocale: "zh",
+        defaultLocale: "not_a_locale",
+        acceptLanguage: "en-US",
+      }),
+    ).toBe("zh-Hans");
+  });
+
+  it("retains the upstream fallback without usable locale signals", () => {
+    expect(
+      resolveLocaleFromSignals({ defaultLocale: "not_a_locale" }),
     ).toBe("en");
   });
 

@@ -1,3 +1,4 @@
+// Modified for Codeloom: keep server-rendered locale resolution aligned with the runtime proxy.
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import { LOCALE_COOKIE, type SupportedLocale } from "@multica/core/i18n";
@@ -16,6 +17,7 @@ export const getRequestLocale = cache(
     const cookieStore = await cookies();
     return resolveLocaleFromSignals({
       cookieLocale: cookieStore.get(LOCALE_COOKIE)?.value,
+      defaultLocale: process.env.MULTICA_DEFAULT_LOCALE,
       acceptLanguage: headerList.get("accept-language"),
     });
   },

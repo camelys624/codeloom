@@ -1,3 +1,29 @@
+<!-- Codeloom 修改：内部部署说明与上游来源记录。 -->
+## Codeloom 内部开发版本
+
+本仓库改为基于 [Multica](https://github.com/multica-ai/multica) 开发，
+固定基线为 **v0.5.0**，上游提交 `2df765a3c8f39789c9fb76316378bcffc20d22d9`。
+Codeloom 是内部项目名称，不替换 Multica 界面中的产品名、LOGO 和版权标识；
+完整的上游 LICENSE 和 NOTICE 原样保留。
+
+请使用 [Codeloom 团队部署入口](SELF_HOSTING.md#codeloom-internal-deployment)，
+不要使用下文的上游云服务安装流程。团队配置从当前源码构建，使用独立的
+`codeloom` 容器和数据卷，只允许指定邮箱注册，关闭遥测，默认显示简体中文，
+并保留个人语言选择。
+
+旧版 Codeloom 保留在 Git 历史 `076dd49`，没有迁移其数据库、Runner 凭据、
+Task/Run/Attempt/Turn 模型或人工工具审批机制。Multica daemon 默认自动批准
+工具调用，以所在系统用户的权限执行；应使用专用用户、容器或隔离机器。
+不要连接旧数据库或复用旧密钥。任务完成后的人工验收不等于执行前的工具审批。
+
+上游 Git 历史已接入：`origin` 仍是 Codeloom 仓库，`upstream` 指向 Multica。
+后续升级从 `main` 建独立分支和 worktree，合并选定的上游 release，
+验证登录、语言选择、daemon 连通、执行和恢复，再集成；不要自动追踪 `latest`。
+上游发布工作流在非 Multica 官方仓库中不会发布产物。
+
+[Multica License](LICENSE) 允许同一组织内使用；向第三方提供托管服务、
+修改 UI 品牌标识分别需要相应授权。以下保留上游项目介绍。
+
 <div align="center">
 
 <picture>

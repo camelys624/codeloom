@@ -1,3 +1,4 @@
+# Modified for Codeloom: upstream release automation must not publish from this derivative.
 name: Release
 
 on:
@@ -14,6 +15,7 @@ permissions:
 
 jobs:
   verify:
+    if: github.repository == 'multica-ai/multica'
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release_meta.outputs.tag_name }}

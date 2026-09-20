@@ -1,3 +1,4 @@
+// Modified for Codeloom: resolve the deployment locale at request time, after explicit preferences.
 import { NextResponse, type NextRequest } from "next/server";
 import { LOCALE_COOKIE } from "@multica/core/i18n";
 import {
@@ -28,6 +29,7 @@ const LEGACY_ROUTE_SEGMENTS = new Set([
 function resolveLocale(req: NextRequest): string {
   return resolveLocaleFromSignals({
     cookieLocale: req.cookies.get(LOCALE_COOKIE)?.value,
+    defaultLocale: process.env.MULTICA_DEFAULT_LOCALE,
     acceptLanguage: req.headers.get("accept-language"),
   });
 }

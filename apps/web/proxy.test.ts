@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+// Modified for Codeloom: verify request-time deployment locale and explicit cookie precedence.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { MULTICA_LOCALE_HEADER } from "./lib/locale-routing";
 import { config, proxy } from "./proxy";
+
+beforeEach(() => {
+  vi.stubEnv("MULTICA_DEFAULT_LOCALE", "");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function makeRequest(
   path: string,
@@ -286,5 +295,50 @@ describe("proxy root and locale handling", () => {
     expect(
       res.headers.get(`x-middleware-request-${MULTICA_LOCALE_HEADER}`),
     ).toBe("zh-Hans");
+  });
+
+  it.each(["/login", "/auth/callback"])(
+    "preserves an explicit language on %s despite the deployment default",
+    (path) => {
+      vi.stubEnv("MULTICA_DEFAULT_LOCALE", "zh-Hans");
+      const res = proxy(makeRequest(path, { "multica-locale": "en" }));
+
+      expect(
+        res.headers.get(`x-middleware-request-${MULTICA_LOCALE_HEADER}`),
+      ).toBe("en");
+      expect(res.cookies.get("multica-locale")).toBeUndefined();
+    },
+  );
+
+  it.each(["/login", "/auth/callback"])(
+    "uses the deployment default on %s without storing a user preference",
+    (path) => {
+      vi.stubEnv("MULTICA_DEFAULT_LOCALE", "zh-Hans");
+      const res = proxy(
+        new NextRequest(`https://app.multica.test${path}`, {
+          headers: { "accept-language": "en-US" },
+        }),
+      );
+
+      expect(
+        res.headers.get(`x-middleware-request-${MULTICA_LOCALE_HEADER}`),
+      ).toBe("zh-Hans");
+      expect(res.cookies.get("multica-locale")).toBeUndefined();
+    },
+  );
+
+  it("reads configuration for each request and ignores invalid defaults", () => {
+    const req = new NextRequest("https://app.multica.test/login", {
+      headers: { "accept-language": "ja-JP" },
+    });
+    vi.stubEnv("MULTICA_DEFAULT_LOCALE", "zh-Hans");
+    expect(
+      proxy(req).headers.get(`x-middleware-request-${MULTICA_LOCALE_HEADER}`),
+    ).toBe("zh-Hans");
+
+    vi.stubEnv("MULTICA_DEFAULT_LOCALE", "zh-CN");
+    expect(
+      proxy(req).headers.get(`x-middleware-request-${MULTICA_LOCALE_HEADER}`),
+    ).toBe("ja");
   });
 });

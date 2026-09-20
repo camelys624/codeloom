@@ -1,6 +1,122 @@
+<!-- Modified for Codeloom: source-built internal deployment instructions. -->
 # Self-Hosting Guide
 
 Deploy Multica on your own infrastructure in minutes.
+
+## Codeloom internal deployment
+
+本仓库的团队入口使用下面的源码构建方式。其余章节是保留的上游说明；
+`make selfhost`、官方安装脚本和官方镜像不会包含本仓库的修改。
+
+### 初始化与启动
+
+需要 Node.js 22+、Docker 和 Docker Compose **2.24.4+**。从仓库根目录运行，
+将 IP 换成服务器的实际局域网地址，将邮箱换成团队成员邮箱：
+
+```bash
+node scripts/codeloom-init.mjs \
+  --origin http://192.168.31.234:3100 \
+  --email you@your-company.example,teammate@your-company.example
+
+# 此函数仅方便复用完全相同的 Compose 文件和项目名。
+codeloom() {
+  docker compose --project-name codeloom --env-file .env.codeloom \
+    -f docker-compose.selfhost.yml \
+    -f docker-compose.selfhost.build.yml \
+    -f docker-compose.codeloom.yml "$@"
+}
+
+codeloom up -d --build
+codeloom ps
+curl --fail http://192.168.31.234:8180/healthz
+```
+
+打开 **http://192.168.31.234:3100/login**。前端/API 只发布到指定的 LAN IPv4，
+数据库不发布端口；容器内部服务监听可达接口。WSL 用户仍需确保 Windows 防火墙、
+WSL 网络模式及路由允许其他设备访问；本机访问成功不等于已经证明跨设备可达。
+
+初始化命令生成独立随机的 JWT、PostgreSQL 和 VCS 加密密钥，
+写入权限 `0600` 的 `.env.codeloom`；不复制旧 `.env`，不覆盖已有文件或符号链接。
+使用域名时传 `--bind-address <本机LAN-IP>`；其他选项见 `--help`，
+自定义输出路径用 `--output`，不要把私密配置提交到 Git。
+
+入口配置为 `CODELOOM_PUBLIC_ORIGIN`，避免继承旧 Codeloom 的 `PUBLIC_ORIGIN`。
+修改地址时同步修改 `PUBLIC_HOST`、`FRONTEND_PORT` 和必要的 `BIND_ADDRESS`，
+然后重建容器。Compose 仍遵循标准的 shell 环境优先级；不要混用其他部署的环境变量。
+两个容器均不终止 TLS；HTTPS 域名需要自己的 TLS 反向代理，
+并把 `FRONTEND_PORT` 改成代理转发到的内部 HTTP 端口。
+
+### 登录、语言与 Agent
+
+- `ALLOWED_EMAILS` 是显式邮箱白名单；空值拒绝启动。通用注册关闭，
+  但上游策略允许白名单邮箱创建账号。修改白名单不会撤销已存在账号。
+- 默认启用生产模式，没有固定验证码。建议在 `.env.codeloom` 配置内部 SMTP；
+  未配置邮件时，上游会把随机验证码写入 `codeloom logs backend`，仅用于管理员验证，
+  必须保护日志访问。首次登录后创建团队工作区。
+- 默认语言 `zh-Hans` 通过运行时 `MULTICA_DEFAULT_LOCALE` 配置，不需要重新构建前端。
+  显式语言 cookie 优先；登录后的账号语言同步沿用上游规则，设置中可切换并保存语言。
+- 使用匹配 v0.5.0 的 `multica` CLI，在**隔离的执行机器**上连接：
+
+  ```bash
+  multica setup self-host \
+    --server-url http://192.168.31.234:8180 \
+    --app-url http://192.168.31.234:3100
+  ```
+
+  daemon 保留上游行为：自动批准工具，以系统用户权限运行，并可能自动重试。
+  此部署不提供旧 Codeloom 的人工工具审批，也不是操作系统沙箱。
+  正式接入代码前，用测试仓库验证任务、追问、取消、重连和产物。
+
+### 隔离、隐私与维护
+
+- 源码基线 v0.5.0，构建版本 `v0.5.0-codeloom`，本地镜像为
+  `codeloom-backend:dev` / `codeloom-web:dev`；不拉官方 `latest` 代替本地修改。
+- 项目名 `codeloom` 隔离容器及数据卷，不连接原 Codeloom PostgreSQL，
+  不迁移旧任务、会话、Runner 令牌或凭据。
+- 团队 overlay 强制 `DO_NOT_TRACK=1`、`ANALYTICS_DISABLED=true`，
+  Next.js 构建和运行时遥测也关闭。不配置托管云 URL。
+  **不代表零网络外连**：依赖下载、Git 服务、Agent 模型请求仍会访问其配置的服务。
+- Docker 发布端口可能绕过主机防火墙；只在可信 LAN/VPN 中使用，不向第三方开放。
+  保留 Multica UI 名称、LOGO、版权信息以及完整 LICENSE/NOTICE。
+- 日常停止用 `codeloom down`，保留数据卷。备份 PostgreSQL、uploads 卷与
+  `.env.codeloom` 中的密钥；不要为升级删除数据卷或重新生成已有 VCS 密钥。
+- 修改配置后用 `codeloom up -d --no-build --pull never` 重建容器；
+  修改源码后用 `codeloom up -d --build`。离线复用已构建镜像同样使用
+  `--no-build --pull never`，不会重新下载官方镜像。
+- 若构建机器无法直连 npm/Go 依赖源，配置本机可达的 Docker 构建代理；
+  不要把本机代理地址、凭据或 host 网络模式写入团队运行配置。
+
+本机 WSL 构建时曾因无法直连 `proxy.golang.org` 超时。若使用只监听本机的代理，
+可在 Linux/WSL 上单独通过 host 构建网络生成相同镜像，再按正常隔离网络启动：
+
+```bash
+# 按实际代理设置；不要将代理凭据写进 Dockerfile 或提交到 Git。
+export HTTP_PROXY="$http_proxy"
+export HTTPS_PROXY="$https_proxy"
+docker build --network host --build-arg HTTP_PROXY --build-arg HTTPS_PROXY \
+  --build-arg VERSION=v0.5.0-codeloom \
+  -t codeloom-backend:dev -f Dockerfile .
+docker build --network host --build-arg HTTP_PROXY --build-arg HTTPS_PROXY \
+  --build-arg NEXT_PUBLIC_APP_VERSION=v0.5.0-codeloom \
+  -t codeloom-web:dev -f Dockerfile.web .
+codeloom up -d --no-build --pull never
+```
+
+### 本次验证边界
+
+已验证源码构建两个镜像、数据库迁移及 `/healthz`、真实浏览器中文登录、
+随机验证码、创建工作区、创建中文任务并刷新保留、应用 WebSocket `101` 握手，
+以及设置为英文后刷新仍保留个人选择。白名单外邮箱返回 `403`，
+固定验证码被拒绝；后端日志确认遥测及 analytics 均关闭。
+语言/登录相关 74 个测试及初始化文件安全回归测试通过。
+
+验证使用一次性的 `smoke@codeloom.invalid` 账号和独立数据卷；不是团队正式部署。
+未连接真实 Agent，未执行模型任务，未验证断线恢复、跨设备 LAN 访问或旧数据迁移。
+这些不应从 Web/API 验证成功中推断。
+
+---
+
+The remaining sections describe upstream Multica defaults, not the Codeloom overlay.
 
 ## Architecture
 
