@@ -187,12 +187,9 @@ export function WorkspaceRouteLayout() {
        *  Modal — unless the store signal has already been consumed, in
        *  which case the hook renders null. */}
       {!overlayActive && <WelcomeAfterOnboarding />}
-      {/* Source-attribution backfill: same Dialog the web shell mounts
-       *  inside DashboardLayout. Desktop's WorkspaceRouteLayout doesn't
-       *  wrap DashboardLayout, so the modal has to be wired in directly
-       *  here. Same overlay-suppression rule as WelcomeAfterOnboarding —
-       *  a portal-rendered Dialog at z-50 would otherwise sit above an
-       *  active pre-workspace overlay. */}
+      {/* Desktop retains upstream source-attribution backfill; Codeloom web
+       *  no longer mounts it. Suppress the portal while a pre-workspace
+       *  overlay is active so it cannot cover that flow. */}
       {!overlayActive && <SourceBackfillModal />}
     </WorkspaceSlugProvider>
   );

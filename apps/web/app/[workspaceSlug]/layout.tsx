@@ -34,12 +34,8 @@ export default function WorkspaceLayout({
     if (!isAuthLoading && !user) router.replace(paths.login());
   }, [isAuthLoading, user, router]);
 
-  // Hard onboarding gate. Authenticated user but onboarded_at NULL means
-  // they bypassed /onboarding (typed the URL, deeplink, etc.). Redirect
-  // back so the questionnaire + Step 3 finish. The reverse gate lives in
-  // `apps/web/app/(auth)/onboarding/page.tsx` — onboarded users hitting
-  // /onboarding bounce out to their workspace. Together those two effects
-  // make `onboarded_at` the single source of truth for "may access /<slug>/*".
+  // Modified for Codeloom: uninitialized accounts pass through automatic
+  // workspace setup; no questionnaire or runtime setup is required.
   useEffect(() => {
     if (user && user.onboarded_at == null) {
       router.replace(paths.onboarding());

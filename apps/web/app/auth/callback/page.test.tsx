@@ -1,3 +1,4 @@
+// Modified for Codeloom: web login does not require source-attribution data.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { SupportedLocale } from "@multica/core/i18n";
@@ -453,10 +454,7 @@ describe("CallbackPage", () => {
     }
   });
 
-  it("onboarded users with missing source land in the workspace; the source-backfill modal is mounted there", async () => {
-    // Source attribution backfill is now an in-workspace modal — see
-    // `<SourceBackfillModal />` mounted inside `DashboardLayout`. The
-    // callback page is intentionally agnostic about it.
+  it("onboarded users with missing source land directly in the workspace", async () => {
     mockLoginWithGoogle.mockResolvedValue(
       makeUser({
         onboarded_at: "2026-01-01T00:00:00Z",
