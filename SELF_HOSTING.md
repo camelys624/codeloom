@@ -8,6 +8,10 @@ Deploy Multica on your own infrastructure in minutes.
 本仓库的团队入口使用下面的源码构建方式。其余章节是保留的上游说明；
 `make selfhost`、官方安装脚本和官方镜像不会包含本仓库的修改。
 
+线上域名、HTTPS、镜像发布、Agent 接入、备份恢复及升级回滚，请使用
+[Codeloom 线上部署手册](docs/codeloom-deployment.md)。下方仍是局域网快速启动方式，
+不要将其 HTTP 端口直接暴露到公网。
+
 ### 初始化与启动
 
 需要 Node.js 22+、Docker 和 Docker Compose **2.24.4+**。从仓库根目录运行，
