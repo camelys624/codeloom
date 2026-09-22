@@ -122,6 +122,8 @@ export const api = {
   createTask: (input: {
     title: string;
     description: string;
+    status?: 'backlog' | 'todo';
+    priority?: Task['priority'];
     repositoryId: string | null;
   }) =>
     request(
@@ -145,18 +147,20 @@ export const api = {
     ),
   updateTask: (
     taskId: string,
-    input: { revision: number; repositoryId: string | null },
+    input: {
+      revision: number;
+      title?: string;
+      description?: string;
+      status?: Task['status'];
+      priority?: Task['priority'] | null;
+      repositoryId?: string | null;
+    },
   ) =>
     request(
       `/api/v1/tasks/${encodeURIComponent(taskId)}`,
       {
         method: 'PATCH',
-        body: JSON.stringify(
-          UpdateTaskInputSchema.parse({
-            revision: input.revision,
-            repositoryId: input.repositoryId,
-          }),
-        ),
+        body: JSON.stringify(UpdateTaskInputSchema.parse(input)),
       },
       TaskSchema.parse,
     ),

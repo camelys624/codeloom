@@ -27,7 +27,7 @@ bun run --filter @agent-workspace/runner dev -- daemon
 ```
 
 开发模式 BlobStore 写 `./.data/blobs`。Vite client 只代理 `/api`、`/ws/client`；Runner 始终直接连接 Fastify 的 `:5181`，不连接 Vite。开发环境 Fastify 不托管静态文件。
-局域网访问规则：Vite 开发服务器必须绑定 `0.0.0.0`（启动参数为 `vite --host 0.0.0.0 --port 5173`），禁止绑定 `127.0.0.1`。浏览器通过宿主机局域网 IP 的 `:5173` 访问，例如 `http://192.168.31.234:5173`；局域网 IP 变化时同步更新 `.env` 的 `PUBLIC_ORIGIN`，否则登录和 CSRF 校验的来源可能不匹配。
+局域网访问规则：Vite 开发服务器和 Fastify API 都必须绑定 `0.0.0.0`，禁止绑定 `127.0.0.1`。浏览器通过宿主机局域网 IP 的 `:5173` 访问，例如 `http://192.168.31.234:5173`；Vite 将 `/api/*` 和 `/ws/client` 代理到同机 Fastify。局域网 IP 变化时同步更新 `.env` 的 `PUBLIC_ORIGIN`，否则登录和 CSRF 校验的来源可能不匹配。
 
 首次 `bun install` 后执行 `bun pm untrusted`，把项目确实需要安装脚本的依赖写入根 `package.json` 的 `trustedDependencies` 再重新安装，见 §9。
 
