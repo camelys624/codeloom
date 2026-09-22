@@ -74,31 +74,31 @@ func (s *failingSourceContextObjectStore) attemptCount() int {
 func TestCleanupSourceContextObjectIntentsBoundsAttemptsNotSuccesses(t *testing.T) {
 	pool := newResolveOriginatorPool(t)
 	ctx := context.Background()
-	lockSourceContextCleanupTests(t, pool)
 
 	workspaceID, _, _, _ := seedAttributionFixture(t, pool)
 	workspaceUUID := util.MustParseUUID(workspaceID)
 
-	// The whole fixture lives in a rolled-back transaction: the sweeper is
-	// global, so seeding due rows outside one would let a developer server (or
-	// the next test) claim them mid-assertion.
+	// Use a transaction-local copy so neither other suites nor their table
+	// statistics can change which intents this test claims.
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin isolated intent batch: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `LOCK TABLE issue_source_context_object_intent IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		t.Fatalf("lock object intent table: %v", err)
-	}
-	// Park any pre-existing due row so the claim order below is exactly the
-	// three intents this test seeds.
 	if _, err := tx.Exec(ctx, `
-		UPDATE issue_source_context_object_intent
-		SET next_attempt_at = now() + interval '1 hour'
-		WHERE next_attempt_at <= now()
+		CREATE TEMP TABLE issue_source_context_object_intent
+			(LIKE public.issue_source_context_object_intent INCLUDING ALL) ON COMMIT DROP;
+		SET LOCAL search_path = pg_temp, public;
+		INSERT INTO issue_source_context_object_intent (
+			storage_key, workspace_id, source_context_id, attachment_id, object_url
+		) VALUES ('planner-statistics', gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), '');
+		DELETE FROM issue_source_context_object_intent;
+		ANALYZE issue_source_context_object_intent;
 	`); err != nil {
-		t.Fatalf("park pre-existing due intents: %v", err)
+		t.Fatalf("isolate object intent table: %v", err)
 	}
+	// Empty-table statistics followed by a small batch reproduce the planner
+	// choosing a nested loop that rescans an unmaterialized claim subquery.
 
 	qtx := db.New(pool).WithTx(tx)
 	keys := make([]string, 0, 3)

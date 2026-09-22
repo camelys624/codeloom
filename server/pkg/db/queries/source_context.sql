@@ -129,12 +129,10 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND state = 'pending'
 RETURNING storage_key;
 
+-- Freeze the single candidate before UPDATE: a nested-loop plan can otherwise
+-- rescan the locking subquery and claim multiple rows despite its LIMIT 1.
 -- name: ClaimSourceContextObjectIntentForCleanup :one
-UPDATE issue_source_context_object_intent AS intent
-SET state = 'deleting',
-    lease_token = sqlc.arg(lease_token),
-    lease_expires_at = now() + interval '2 minutes'
-FROM (
+WITH due AS MATERIALIZED (
     SELECT candidate.storage_key
     FROM issue_source_context_object_intent candidate
     WHERE candidate.next_attempt_at <= now()
@@ -145,7 +143,12 @@ FROM (
     ORDER BY candidate.next_attempt_at, candidate.storage_key
     LIMIT 1
     FOR UPDATE SKIP LOCKED
-) due
+)
+UPDATE issue_source_context_object_intent AS intent
+SET state = 'deleting',
+    lease_token = sqlc.arg(lease_token),
+    lease_expires_at = now() + interval '2 minutes'
+FROM due
 WHERE intent.storage_key = due.storage_key
 RETURNING intent.*;
 
