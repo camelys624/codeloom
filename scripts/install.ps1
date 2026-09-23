@@ -1,10 +1,12 @@
-# Multica installer for Windows — one command to get started.
+# Modified for Codeloom: install only the Multica CLI release that matches the Codeloom server.
 #
-# Install CLI (default): connects to multica.ai
-#   irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
+# Multica CLI installer for Codeloom on Windows. Codeloom does not modify the
+# CLI, so this installs the upstream Multica CLI pinned to the release Codeloom
+# is built on. The Codeloom server is source-built; see
+# SELF_HOSTING.md#codeloom-internal-deployment.
 #
-# Self-host: starts a local Multica server + installs CLI + configures
-#   $env:MULTICA_MODE="local"; irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
+# Install the CLI, or switch an existing one to the pinned version:
+#   irm https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.ps1 | iex
 #
 
 $ErrorActionPreference = "Stop"
@@ -12,15 +14,12 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-$RepoUrl       = "https://github.com/multica-ai/multica.git"
-$RepoWebUrl    = "https://github.com/multica-ai/multica"
-$DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
-$InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }
-
-# Host ports Compose reported after `up -d`; set by Setup-Server and reused by
-# the summary so the health check and the printed URLs cannot diverge.
-$script:SelfHostBackendPort  = $null
-$script:SelfHostFrontendPort = $null
+# Keep in step with the upstream release Codeloom is based on.
+$DefaultCliVersion = "v0.5.0"
+$CliVersion      = if ($env:MULTICA_CLI_VERSION) { $env:MULTICA_CLI_VERSION } else { $DefaultCliVersion }
+$CliVersion      = "v" + $CliVersion.TrimStart('v')
+$CliReleasesUrl  = "https://github.com/multica-ai/multica/releases"
+$SelfHostDocsUrl = "https://github.com/camelys624/codeloom/blob/main/SELF_HOSTING.md#codeloom-internal-deployment"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -33,113 +32,6 @@ function Write-Fail  { param([string]$Msg) Write-Host "[ERROR] $Msg" -Foreground
 function Test-CommandExists {
     param([string]$Name)
     $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
-function New-RandomHex {
-    param([int]$ByteCount)
-
-    $bytes = New-Object byte[] $ByteCount
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $rng.GetBytes($bytes)
-    } finally {
-        $rng.Dispose()
-    }
-    return -join ($bytes | ForEach-Object { "{0:x2}" -f $_ })
-}
-
-# Host port Docker Compose actually published for a service.
-#
-# This is the only authority. Compose's interpolation gives the calling process
-# environment precedence over .env, so an ambient PORT / BACKEND_PORT / API_PORT
-# / SERVER_PORT / FRONTEND_PORT moves the published port without touching the
-# file. Re-deriving the port from .env alone made the installer probe and print
-# a port the stack was never published on (#6145). Must be called from the
-# installation directory, after `up -d`.
-function Get-ComposePublishedPort {
-    param(
-        [Parameter(Mandatory = $true)][string]$Service,
-        [Parameter(Mandatory = $true)][int]$ContainerPort
-    )
-
-    $output = $null
-    try {
-        $output = docker compose -f docker-compose.selfhost.yml port $Service $ContainerPort 2>$null
-    } catch {
-        return $null
-    }
-    if ($LASTEXITCODE -ne 0) {
-        return $null
-    }
-
-    $line = @($output | Where-Object { $_ }) | Select-Object -Last 1
-    if (-not $line) {
-        return $null
-    }
-
-    $published = ($line -split ":")[-1].Trim()
-    if ($published -notmatch '^[0-9]+$') {
-        return $null
-    }
-    return $published
-}
-
-function Get-LatestVersion {
-    try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/multica-ai/multica/releases/latest" -ErrorAction Stop
-        return $release.tag_name
-    } catch {
-        return $null
-    }
-}
-
-function Get-SelfHostRef {
-    if ($env:MULTICA_SELFHOST_REF) {
-        return $env:MULTICA_SELFHOST_REF
-    }
-
-    $latest = Get-LatestVersion
-    if ($latest) {
-        return $latest
-    }
-
-    return "main"
-}
-
-function Checkout-ServerRef {
-    param([string]$Ref)
-
-    if ($Ref -eq "main") {
-        git fetch origin main --depth 1 2>$null
-        git checkout --force main 2>$null
-        git reset --hard origin/main 2>$null
-        return
-    }
-
-    git fetch origin --tags --force 2>$null
-    $tagRef = "refs/tags/$Ref"
-    git show-ref --verify --quiet $tagRef 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        git checkout --force $Ref 2>$null
-        return
-    }
-
-    git fetch origin $Ref --depth 1 2>$null
-    git checkout --force $Ref 2>$null
-}
-
-function Pull-OfficialSelfHostImages {
-    docker compose -f docker-compose.selfhost.yml pull
-    if ($LASTEXITCODE -eq 0) {
-        return
-    }
-
-    Write-Host ""
-    Write-Warn "Official images for the selected self-host channel are not published yet."
-    Write-Host "This can happen before the first GHCR release is available."
-    Write-Host "From $InstallDir, build from source instead:"
-    Write-Host "  docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build"
-    exit 1
 }
 
 function Convert-ToCliArch {
@@ -233,7 +125,7 @@ function Get-InstalledCliVersion {
 # CLI Installation
 # ---------------------------------------------------------------------------
 function Install-CliBinary {
-    Write-Info "Installing Multica CLI from GitHub Releases..."
+    Write-Info "Installing Multica CLI $CliVersion from GitHub Releases..."
 
     if (-not [Environment]::Is64BitOperatingSystem) {
         Write-Fail "Multica requires a 64-bit Windows installation."
@@ -241,13 +133,8 @@ function Install-CliBinary {
 
     $arch = Get-WindowsCliArch
 
-    $latest = Get-LatestVersion
-    if (-not $latest) {
-        Write-Fail "Could not determine latest release. Check your network connection."
-    }
-
-    $version = $latest.TrimStart('v')
-    $url = "https://github.com/multica-ai/multica/releases/download/$latest/multica-cli-$version-windows-$arch.zip"
+    $version = $CliVersion.TrimStart('v')
+    $url = "$CliReleasesUrl/download/$CliVersion/multica-cli-$version-windows-$arch.zip"
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "multica-install"
 
     if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
@@ -262,7 +149,7 @@ function Install-CliBinary {
     }
 
     # Verify SHA256 checksum
-    $checksumUrl = "https://github.com/multica-ai/multica/releases/download/$latest/checksums.txt"
+    $checksumUrl = "$CliReleasesUrl/download/$CliVersion/checksums.txt"
     try {
         $checksums = Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing -ErrorAction Stop
         $checksumContent = if ($checksums.Content -is [byte[]]) {
@@ -335,235 +222,44 @@ function Add-ToUserPath {
 function Install-Cli {
     if (Test-CommandExists "multica") {
         $currentVer = Get-InstalledCliVersion
-        $latestVer = Get-LatestVersion
-
-        $currentCmp = if ($currentVer) { $currentVer -replace '^v','' } else { $null }
-        $latestCmp = if ($latestVer) { $latestVer -replace '^v','' } else { $null }
-
-        $isUpToDate = $currentCmp -and -not $latestCmp
-        if (-not $isUpToDate) {
-            try {
-                $isUpToDate = $currentCmp -and $latestCmp -and ([System.Version]$currentCmp -ge [System.Version]$latestCmp)
-            } catch {
-                $isUpToDate = $currentCmp -and $latestCmp -and ($currentCmp -eq $latestCmp)
-            }
-        }
-
-        if ($isUpToDate) {
-            Write-Ok "Multica CLI is up to date ($currentVer)"
+        if ($currentVer -eq $CliVersion) {
+            Write-Ok "Multica CLI is already $CliVersion"
             return
         }
-
-        Write-Info "Multica CLI $currentVer installed, latest is $latestVer - upgrading..."
-        Install-CliBinary
-
-        $newVer = Get-InstalledCliVersion
-        Write-Ok "Multica CLI upgraded ($currentVer -> $newVer)"
-        return
+        Write-Info "Multica CLI $currentVer installed, Codeloom uses $CliVersion - replacing..."
     }
 
     Install-CliBinary
 
-    if (-not (Test-CommandExists "multica")) {
-        Write-Fail "CLI installed but 'multica' not found on PATH. Restart your terminal and try again."
+    # Another multica earlier on PATH (e.g. from Scoop) would keep shadowing the
+    # binary just installed.
+    $newVer = Get-InstalledCliVersion
+    if ($newVer -ne $CliVersion) {
+        $found = Get-Command multica -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+        if (-not $found) { $found = "not found" }
+        Write-Fail "Installed $CliVersion, but 'multica' on PATH is $newVer at $found.`n  Remove the other copy or restart your terminal, then re-run this script."
     }
 }
 
 # ---------------------------------------------------------------------------
-# Docker check
-# ---------------------------------------------------------------------------
-function Test-Docker {
-    if (-not (Test-CommandExists "docker")) {
-        Write-Fail @"
-Docker is not installed. Multica self-hosting requires Docker and Docker Compose.
-
-Install Docker Desktop for Windows:
-  https://docs.docker.com/desktop/install/windows-install/
-
-After installing Docker, re-run this script with `$env:MULTICA_MODE="local"`.
-"@
-    }
-
-    try {
-        docker info 2>$null | Out-Null
-    } catch {
-        Write-Fail "Docker is installed but not running. Please start Docker Desktop and re-run this script."
-    }
-
-    Write-Ok "Docker is available"
-}
-
-# ---------------------------------------------------------------------------
-# Server setup (self-host / local)
-# ---------------------------------------------------------------------------
-function Install-Server {
-    Write-Info "Setting up Multica server..."
-    $serverRef = Get-SelfHostRef
-    Write-Info "Using self-host assets from $serverRef..."
-
-    if (Test-Path (Join-Path $InstallDir ".git")) {
-        Write-Info "Updating existing installation at $InstallDir..."
-        Write-Warn "Any local changes in $InstallDir will be overwritten."
-    } else {
-        Write-Info "Cloning Multica repository..."
-        if (-not (Test-CommandExists "git")) {
-            Write-Fail "Git is not installed. Please install git and re-run."
-        }
-        if (Test-Path $InstallDir) {
-            Write-Warn "Removing incomplete installation at $InstallDir..."
-            Remove-Item $InstallDir -Recurse -Force
-        }
-        $parentDir = Split-Path $InstallDir -Parent
-        if (-not (Test-Path $parentDir)) {
-            New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
-        }
-        git clone --depth 1 $RepoUrl $InstallDir
-    }
-
-    Push-Location $InstallDir
-    Checkout-ServerRef $serverRef
-    Write-Ok "Repository ready at $InstallDir ($serverRef)"
-
-    if (-not (Test-Path ".env")) {
-        Write-Info "Creating .env with random secrets..."
-        Copy-Item ".env.example" ".env"
-        $jwt = New-RandomHex 32
-        $pgpass = New-RandomHex 24
-        $content = Get-Content ".env"
-        $content = $content -replace '^JWT_SECRET=.*', "JWT_SECRET=$jwt"
-        $content = $content -replace '^POSTGRES_PASSWORD=.*', "POSTGRES_PASSWORD=$pgpass"
-        $content = $content -replace '^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)', "`${1}$pgpass`${2}"
-        $content | Set-Content ".env"
-        Write-Ok "Generated .env with random JWT_SECRET and POSTGRES_PASSWORD"
-    } else {
-        Write-Ok "Using existing .env"
-    }
-
-    Write-Info "Pulling official Multica images..."
-    Pull-OfficialSelfHostImages
-    Write-Info "Starting Multica services (this may take a few minutes on first run)..."
-    docker compose -f docker-compose.selfhost.yml up -d
-
-    # Read the ports Compose actually published, once, and reuse them for both
-    # the health check and the summary so the two can never disagree.
-    $script:SelfHostBackendPort = Get-ComposePublishedPort -Service "backend" -ContainerPort 8080
-    if (-not $script:SelfHostBackendPort) {
-        Write-Fail "Started the stack but could not read the backend host port from Docker Compose.`n  Check it with: cd $InstallDir; docker compose -f docker-compose.selfhost.yml ps"
-    }
-    $script:SelfHostFrontendPort = Get-ComposePublishedPort -Service "frontend" -ContainerPort 3000
-    if (-not $script:SelfHostFrontendPort) {
-        Write-Fail "Started the stack but could not read the frontend host port from Docker Compose.`n  Check it with: cd $InstallDir; docker compose -f docker-compose.selfhost.yml ps"
-    }
-
-    Write-Info "Waiting for backend to be ready..."
-    $ready = $false
-    for ($i = 1; $i -le 45; $i++) {
-        try {
-            $null = Invoke-WebRequest -Uri "http://localhost:$($script:SelfHostBackendPort)/health" -UseBasicParsing -TimeoutSec 2
-            $ready = $true
-            break
-        } catch {
-            Start-Sleep -Seconds 2
-        }
-    }
-
-    if ($ready) {
-        Write-Ok "Multica server is running"
-    } else {
-        Write-Warn "Server is still starting. Check logs with:"
-        Write-Host "  cd $InstallDir; docker compose -f docker-compose.selfhost.yml logs"
-    }
-
-    Pop-Location
-}
-
-
-# ---------------------------------------------------------------------------
-# Main: Default mode (cloud)
+# Main: install / switch the CLI
 # ---------------------------------------------------------------------------
 function Start-DefaultInstall {
     Write-Host ""
-    Write-Host "  Multica - Installer" -ForegroundColor White
+    Write-Host "  Multica CLI for Codeloom - Installer" -ForegroundColor White
     Write-Host ""
 
     Install-Cli
 
     Write-Host ""
     Write-Host "  ============================================" -ForegroundColor Green
-    Write-Host "  [OK] Multica CLI is ready!" -ForegroundColor Green
+    Write-Host "  [OK] Multica CLI $CliVersion is ready!" -ForegroundColor Green
     Write-Host "  ============================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  Next: configure your environment"
+    Write-Host "  Next: connect to your Codeloom server"
     Write-Host ""
-    Write-Host "     multica setup               " -NoNewline; Write-Host "# Connect to Multica Cloud (multica.ai)" -ForegroundColor DarkGray
-    Write-Host "     multica setup self-host      " -NoNewline; Write-Host "# Connect to a self-hosted server" -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  Self-hosting? Install the server first:"
-    Write-Host '     $env:MULTICA_MODE="with-server"; irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex'
-    Write-Host ""
-}
-
-# ---------------------------------------------------------------------------
-# Main: Local mode (self-host)
-# ---------------------------------------------------------------------------
-function Start-LocalInstall {
-    Write-Host ""
-    Write-Host "  Multica - Self-Host Installer" -ForegroundColor White
-    Write-Host "  Provisioning server infrastructure + installing CLI"
-    Write-Host ""
-
-    Test-Docker
-    Install-Server
-    Install-Cli
-
-    Write-Host ""
-    Write-Host "  ============================================" -ForegroundColor Green
-    Write-Host "  [OK] Multica server is running and CLI is ready!" -ForegroundColor Green
-    Write-Host "  ============================================" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "  Frontend:  http://localhost:$($script:SelfHostFrontendPort)"
-    Write-Host "  Backend:   http://localhost:$($script:SelfHostBackendPort)"
-    Write-Host "  Server at: $InstallDir"
-    Write-Host ""
-    Write-Host "  Next: configure your CLI to connect"
-    Write-Host ""
-    Write-Host "     multica setup self-host  " -NoNewline; Write-Host "# Configure + authenticate + start daemon" -ForegroundColor DarkGray
-    Write-Host ""
-    Write-Host "  Login: configure RESEND_API_KEY in .env for email codes,"
-    Write-Host "  or read the generated code from backend logs when Resend is unset."
-    Write-Host ""
-    Write-Host "  To stop all services:"
-    Write-Host '     $env:MULTICA_MODE="stop"; irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex'
-    Write-Host ""
-}
-
-# ---------------------------------------------------------------------------
-# Stop: shut down a self-hosted installation
-# ---------------------------------------------------------------------------
-function Start-Stop {
-    Write-Host ""
-    Write-Info "Stopping Multica services..."
-
-    if (Test-Path $InstallDir) {
-        Push-Location $InstallDir
-        if (Test-Path "docker-compose.selfhost.yml") {
-            docker compose -f docker-compose.selfhost.yml down
-            Write-Ok "Docker services stopped"
-        } else {
-            Write-Warn "No docker-compose.selfhost.yml found at $InstallDir"
-        }
-        Pop-Location
-    } else {
-        Write-Warn "No Multica installation found at $InstallDir"
-    }
-
-    if (Test-CommandExists "multica") {
-        try {
-            multica daemon stop 2>$null
-            Write-Ok "Daemon stopped"
-        } catch {}
-    }
-
+    Write-Host "     multica setup self-host --server-url <backend-url> --app-url <web-url>"
+    Write-Host "     multica daemon restart --no-auto-update   " -NoNewline; Write-Host "# keep the daemon on $CliVersion" -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -573,8 +269,8 @@ function Start-Stop {
 $mode = if ($env:MULTICA_MODE) { $env:MULTICA_MODE.ToLower() } else { "default" }
 
 switch ($mode) {
-    "with-server" { Start-LocalInstall }
-    "local"       { Start-LocalInstall }  # backwards compat alias
-    "stop"        { Start-Stop }
-    default       { Start-DefaultInstall }
+    { $_ -in @("with-server", "local", "stop") } {
+        Write-Fail "MULTICA_MODE=$mode is not supported: the upstream self-host server it manages does not include Codeloom's changes.`n  Deploy Codeloom from source instead: $SelfHostDocsUrl"
+    }
+    default { Start-DefaultInstall }
 }

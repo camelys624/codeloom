@@ -6,7 +6,8 @@ Deploy Multica on your own infrastructure in minutes.
 ## Codeloom internal deployment
 
 本仓库的团队入口使用下面的源码构建方式。其余章节是保留的上游说明；
-`make selfhost`、官方安装脚本和官方镜像不会包含本仓库的修改。
+`make selfhost`、上游安装脚本的 `--with-server` 和官方镜像不会包含本仓库的修改。
+本仓库的 `scripts/install.sh` / `scripts/install.ps1` 只安装匹配版本的 CLI，不部署服务端。
 
 线上域名、HTTPS、镜像发布、Agent 接入、备份恢复及升级回滚，请使用
 [Codeloom 线上部署手册](docs/codeloom-deployment.md)。下方仍是局域网快速启动方式，
@@ -65,12 +66,19 @@ WSL 网络模式及路由允许其他设备访问；本机访问成功不等于�
   Web 主页面不再弹出来源补填问卷。独立桌面客户端暂保留上游引导。
 - 默认语言 `zh-Hans` 通过运行时 `MULTICA_DEFAULT_LOCALE` 配置，不需要重新构建前端。
   显式语言 cookie 优先；登录后的账号语言同步沿用上游规则，设置中可切换并保存语言。
-- 使用匹配 v0.5.0 的 `multica` CLI，在**隔离的执行机器**上连接：
+- 在**隔离的执行机器**上安装匹配 v0.5.0 的 `multica` CLI 并连接。安装脚本固定下载上游
+  v0.5.0 发布包，已安装的其他版本会被替换：
 
   ```bash
+  curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash
+  # Windows PowerShell：
+  # irm https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.ps1 | iex
+
   multica setup self-host \
     --server-url http://192.168.31.234:8180 \
     --app-url http://192.168.31.234:3100
+  # setup 会启动 daemon；关闭自动更新，避免 CLI 自行升级脱离 v0.5.0 基线。
+  multica daemon restart --no-auto-update
   ```
 
   daemon 保留上游行为：自动批准工具，以系统用户权限运行，并可能自动重试。

@@ -11,6 +11,10 @@ not the upstream cloud installer below. Our overlay builds this checkout, uses s
 `codeloom` containers/volumes, restricts signup to team emails, disables telemetry, and
 defaults the web UI to Simplified Chinese while preserving user preferences.
 
+Install the matching Multica CLI (v0.5.0) on execution machines with
+`curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash`
+(Windows: `irm https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.ps1 | iex`).
+
 The former Codeloom implementation remains in Git history at `076dd49`.
 Its database, Runner credentials, Task/Run/Attempt/Turn model, and human tool approvals
 are **not migrated or emulated**. Multica daemons automatically approve agent tools and
@@ -19,7 +23,8 @@ Do not point this deployment at the old database or reuse its secrets.
 
 Upstream history is preserved for future merges. `origin` remains the Codeloom repository;
 `upstream` is Multica. Upgrade through a dedicated branch/worktree from `main`,
-merge an explicitly selected upstream release, and verify login, locale selection,
+merge an explicitly selected upstream release, bump the pinned CLI version in
+`scripts/install.sh` and `scripts/install.ps1`, and verify login, locale selection,
 daemon connectivity, execution, and recovery before integration. Upstream release
 publishing is disabled outside the canonical Multica repository.
 

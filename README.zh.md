@@ -11,6 +11,10 @@ Codeloom 是内部项目名称，不替换 Multica 界面中的产品名、LOGO 
 `codeloom` 容器和数据卷，只允许指定邮箱注册，关闭遥测，默认显示简体中文，
 并保留个人语言选择。
 
+执行机安装匹配的 Multica CLI（v0.5.0）：
+`curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash`
+（Windows：`irm https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.ps1 | iex`）。
+
 旧版 Codeloom 保留在 Git 历史 `076dd49`，没有迁移其数据库、Runner 凭据、
 Task/Run/Attempt/Turn 模型或人工工具审批机制。Multica daemon 默认自动批准
 工具调用，以所在系统用户的权限执行；应使用专用用户、容器或隔离机器。
@@ -18,6 +22,7 @@ Task/Run/Attempt/Turn 模型或人工工具审批机制。Multica daemon 默认�
 
 上游 Git 历史已接入：`origin` 仍是 Codeloom 仓库，`upstream` 指向 Multica。
 后续升级从 `main` 建独立分支和 worktree，合并选定的上游 release，
+同步修改 `scripts/install.sh` 和 `scripts/install.ps1` 中固定的 CLI 版本，
 验证登录、语言选择、daemon 连通、执行和恢复，再集成；不要自动追踪 `latest`。
 上游发布工作流在非 Multica 官方仓库中不会发布产物。
 
