@@ -182,3 +182,6 @@ foreach ($mode in @("with-server", "local", "stop")) {
 }
 
 Write-Host "install.ps1 tests passed" -ForegroundColor Green
+# The server-mode checks leave $LASTEXITCODE at 1, and the CI pwsh shell exits
+# with $LASTEXITCODE, so report success explicitly.
+exit 0

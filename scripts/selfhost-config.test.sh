@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Modified for Codeloom: the CLI-only installers no longer read self-host ports.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -440,37 +441,10 @@ fi
 # gap here.
 #
 # This is also where Compose's precedence is pinned against the real binary: the
-# calling environment outranks the env file. Both installers relied on their own
-# .env-only derivation and so probed a port Compose never published (#6145);
-# they now ask `docker compose port` instead, which is asserted end to end in
-# scripts/install.test.sh and scripts/install.ps1.test.ps1. Those suites run on
-# agents without a Docker CLI, so the ground truth for precedence lives here.
+# calling environment outranks the env file, so a port re-derived from .env alone
+# can differ from the one Compose published (#6145). The Codeloom installers only
+# install the CLI and no longer read these ports.
 # ---------------------------------------------------------------------------
-
-# Neither installer may reconstruct the port from the env file again.
-for installer in scripts/install.sh scripts/install.ps1; do
-  if grep -nE '(selfhost_backend_port|selfhost_frontend_port|Get-SelfHostBackendPort|Get-SelfHostFrontendPort)' "$installer"; then
-    echo "$installer must not re-derive host ports from .env."
-    echo "Read the published port from Compose, as scripts/selfhost-wait.sh does."
-    exit 1
-  fi
-done
-for installer_call in \
-  'compose_published_port backend 8080' \
-  'compose_published_port frontend 3000'; do
-  if ! grep -Fq "$installer_call" scripts/install.sh; then
-    echo "scripts/install.sh must read the published port from Compose: $installer_call"
-    exit 1
-  fi
-done
-for installer_call in \
-  'Get-ComposePublishedPort -Service "backend" -ContainerPort 8080' \
-  'Get-ComposePublishedPort -Service "frontend" -ContainerPort 3000'; do
-  if ! grep -Fq "$installer_call" scripts/install.ps1; then
-    echo "scripts/install.ps1 must read the published port from Compose: $installer_call"
-    exit 1
-  fi
-done
 
 compose_published_ports() {
   local env_file=$1
