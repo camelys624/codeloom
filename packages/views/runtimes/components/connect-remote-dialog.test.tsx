@@ -1,3 +1,4 @@
+// Modified for Codeloom: cover the Codeloom install command and pinned daemon.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -99,6 +100,21 @@ describe("ConnectRemoteDialog", () => {
     expect(baseElement).toHaveTextContent(
       "multica config set app_url https://app.example.com",
     );
+    expect(baseElement).toHaveTextContent(
+      "multica daemon restart --no-auto-update",
+    );
+    expect(baseElement).toHaveTextContent(
+      "multica daemon start --no-auto-update",
+    );
+  });
+
+  it("installs the CLI from the Codeloom repository", () => {
+    const { baseElement } = renderDialog();
+
+    expect(baseElement).toHaveTextContent(
+      "curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash",
+    );
+    expect(baseElement).not.toHaveTextContent("multica-ai/multica");
   });
 
   it("transitions from setup instructions to the connected state", async () => {

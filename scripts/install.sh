@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
-# Multica installer — installs the CLI and optionally provisions a self-host server.
+# Modified for Codeloom: install only the Multica CLI release that matches the Codeloom server.
 #
-# Install / upgrade CLI only:
-#   curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash
+# Multica CLI installer for Codeloom. Codeloom does not modify the CLI, so this
+# installs the upstream Multica CLI pinned to the release Codeloom is built on.
+# The Codeloom server is source-built; see SELF_HOSTING.md#codeloom-internal-deployment.
 #
-# Install CLI + provision self-host server:
-#   curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server
+# Install the CLI, or switch an existing one to the pinned version:
+#   curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash
 #
-# After installation, run `multica setup` to configure your environment.
+# After installation, run `multica setup self-host` to connect to your Codeloom server.
 #
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-REPO_URL="https://github.com/multica-ai/multica.git"
-REPO_WEB_URL="https://github.com/multica-ai/multica"  # without .git, for GitHub web APIs
-INSTALL_DIR="${MULTICA_INSTALL_DIR:-$HOME/.multica/server}"
-BREW_PACKAGE="multica-ai/tap/multica"
-
-# Host ports Compose reported after `up -d`; set by setup_server and reused by
-# the summary so the health check and the printed URLs cannot diverge.
-SELFHOST_BACKEND_PORT=""
-SELFHOST_FRONTEND_PORT=""
+# Keep in step with the upstream release Codeloom is based on.
+DEFAULT_CLI_VERSION="v0.5.0"
+CLI_VERSION="${MULTICA_CLI_VERSION:-$DEFAULT_CLI_VERSION}"
+CLI_VERSION="v${CLI_VERSION#v}"
+CLI_RELEASES_URL="https://github.com/multica-ai/multica/releases"
+SELFHOST_DOCS_URL="https://github.com/camelys624/codeloom/blob/main/SELF_HOSTING.md#codeloom-internal-deployment"
 
 # Colors (disabled when not a terminal)
 if [ -t 1 ] || [ -t 2 ]; then
@@ -57,34 +55,12 @@ print_remote_server_token_hint() {
 
   printf "  ${BOLD}Looks like a remote/SSH session.${RESET} Browser login may not be able to call back to this machine's localhost.\n"
   printf "  Token login is usually simpler here:\n"
-  printf "     1. On your local computer, open ${CYAN}https://multica.ai/settings?tab=tokens${RESET}\n"
-  printf "        and create a token under ${BOLD}Settings > API Tokens${RESET}.\n"
-  printf "     2. On this server, run:\n"
-  printf "        ${CYAN}multica login --token <YOUR_TOKEN>${RESET}\n"
-  printf "        ${CYAN}multica daemon start${RESET}\n"
+  printf "     1. In the Codeloom web UI, create a token under ${BOLD}Settings > API Tokens${RESET} (设置 > API Token).\n"
+  printf "     2. On this machine, run (the token is prompted, keeping it out of shell history):\n"
+  printf "        ${CYAN}multica config set app_url <web-url>${RESET}\n"
+  printf "        ${CYAN}multica login --server-url <backend-url> --token${RESET}\n"
+  printf "        ${CYAN}multica daemon start --no-auto-update${RESET}\n"
   printf "\n"
-}
-
-# Host port Docker Compose actually published for a service.
-#
-# This is the only authority. Compose's interpolation gives the calling process
-# environment precedence over .env, so an ambient PORT / BACKEND_PORT / API_PORT
-# / SERVER_PORT / FRONTEND_PORT moves the published port without touching the
-# file. Re-deriving the port from .env alone made the installer probe and print
-# a port the stack was never published on (#6145). Must be called from the
-# installation directory, after `up -d`.
-compose_published_port() {
-  local service=$1 container_port=$2 published
-
-  published="$(docker compose -f docker-compose.selfhost.yml port "$service" "$container_port" 2>/dev/null | tail -n 1)"
-  published="${published##*:}"
-  published="${published%$'\r'}"
-
-  case "$published" in
-    "" | *[!0-9]*) return 1 ;;
-  esac
-
-  printf "%s" "$published"
 }
 
 detect_os() {
@@ -93,7 +69,7 @@ detect_os() {
     Linux)  OS="linux" ;;
     MINGW*|MSYS*|CYGWIN*)
             fail "This script does not support Windows. Use the PowerShell installer instead:
-  irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex" ;;
+  irm https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.ps1 | iex" ;;
     *)      fail "Unsupported operating system: $(uname -s). Multica supports macOS, Linux, and Windows." ;;
   esac
 
@@ -106,56 +82,22 @@ detect_os() {
   esac
 }
 
+# `multica version` outputs "multica 0.5.0 (commit: ..., built: ...)" — print just
+# the version, without a leading 'v'.
+installed_cli_version() {
+  local version
+  version=$(multica version 2>/dev/null | awk 'NR==1{print $2}' || true)
+  printf '%s' "${version#v}"
+}
+
 # ---------------------------------------------------------------------------
 # CLI Installation
 # ---------------------------------------------------------------------------
-_dump_brew_log() {
-  local log="$1"
-  if [ -s "$log" ]; then
-    warn "Homebrew output (last 80 lines):"
-    tail -n 80 "$log" | sed 's/^/  /' >&2
-  fi
-}
-
-install_cli_brew() {
-  info "Installing Multica CLI via Homebrew..."
-  local brew_log
-  brew_log=$(mktemp)
-  if ! brew tap multica-ai/tap >"$brew_log" 2>&1; then
-    warn "Failed to add Homebrew tap. Falling back to GitHub Releases binary install."
-    _dump_brew_log "$brew_log"
-    rm -f "$brew_log"
-    return 1
-  fi
-  # brew install exits non-zero if already installed on older Homebrew versions
-  if ! brew install "$BREW_PACKAGE" >"$brew_log" 2>&1; then
-    if brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
-      rm -f "$brew_log"
-      ok "Multica CLI already installed via Homebrew"
-    else
-      warn "Failed to install multica via Homebrew. Falling back to GitHub Releases binary install."
-      _dump_brew_log "$brew_log"
-      rm -f "$brew_log"
-      return 1
-    fi
-  else
-    rm -f "$brew_log"
-    ok "Multica CLI installed via Homebrew"
-  fi
-}
-
 install_cli_binary() {
-  info "Installing Multica CLI from GitHub Releases..."
+  info "Installing Multica CLI $CLI_VERSION from GitHub Releases..."
 
-  # Get latest release tag
-  local latest
-  latest=$(curl -sI "$REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true)
-  if [ -z "$latest" ]; then
-    fail "Could not determine latest release. Check your network connection."
-  fi
-
-  local version="${latest#v}"
-  local url="https://github.com/multica-ai/multica/releases/download/${latest}/multica-cli-${version}-${OS}-${ARCH}.tar.gz"
+  local version="${CLI_VERSION#v}"
+  local url="$CLI_RELEASES_URL/download/${CLI_VERSION}/multica-cli-${version}-${OS}-${ARCH}.tar.gz"
   local tmp_dir
   tmp_dir=$(mktemp -d)
 
@@ -200,232 +142,36 @@ add_to_path() {
   done
 }
 
-get_latest_version() {
-  # grep exits 1 when no match; use `|| true` to avoid triggering pipefail
-  curl -sI "$REPO_WEB_URL/releases/latest" 2>/dev/null | grep -i '^location:' | sed 's/.*tag\///' | tr -d '\r\n' || true
-}
-
-get_selfhost_ref() {
-  if [ -n "${MULTICA_SELFHOST_REF:-}" ]; then
-    printf '%s' "$MULTICA_SELFHOST_REF"
-    return
-  fi
-
-  local latest
-  latest=$(get_latest_version)
-  if [ -n "$latest" ]; then
-    printf '%s' "$latest"
-    return
-  fi
-
-  printf '%s' "main"
-}
-
-checkout_server_ref() {
-  local ref="$1"
-
-  if [ "$ref" = "main" ]; then
-    git fetch origin main --depth 1 2>/dev/null || true
-    git checkout --force main 2>/dev/null || true
-    git reset --hard origin/main 2>/dev/null || true
-    return
-  fi
-
-  git fetch origin --tags --force 2>/dev/null || true
-  if git rev-parse --verify --quiet "refs/tags/$ref" >/dev/null; then
-    git checkout --force "$ref" 2>/dev/null || git checkout --force "tags/$ref" 2>/dev/null || true
-    return
-  fi
-
-  git fetch origin "$ref" --depth 1 2>/dev/null || true
-  git checkout --force "$ref" 2>/dev/null || true
-}
-
-pull_official_selfhost_images() {
-  if docker compose -f docker-compose.selfhost.yml pull; then
-    return
-  fi
-
-  echo ""
-  warn "Official images for the selected self-host channel are not published yet."
-  echo "This can happen before the first GHCR release is available."
-  echo "From $INSTALL_DIR, build from source instead:"
-  echo "  docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build"
-  exit 1
-}
-
-upgrade_cli_brew() {
-  info "Upgrading Multica CLI via Homebrew..."
-  brew update 2>/dev/null || true
-  if brew upgrade "$BREW_PACKAGE" 2>/dev/null; then
-    ok "Multica CLI upgraded via Homebrew"
-  else
-    # brew upgrade exits non-zero if already up to date
-    ok "Multica CLI is already the latest version"
-  fi
-}
-
 install_cli() {
   if command_exists multica; then
     local current_ver
-    # `multica version` outputs "multica 0.3.23 (commit: f46b929eb, built: 2026-06-16T10:11:56Z)" — extract just the version
-    current_ver=$(multica version 2>/dev/null | awk 'NR==1{print $2}' || echo "unknown")
-
-    local latest_ver
-    latest_ver=$(get_latest_version)
-
-    # Normalize: strip leading 'v' for comparison
-    local current_cmp="${current_ver#v}"
-    local latest_cmp="${latest_ver#v}"
-
-    if [ -z "$latest_ver" ] || [ "$current_cmp" = "$latest_cmp" ]; then
-      ok "Multica CLI is up to date ($current_ver)"
+    current_ver=$(installed_cli_version)
+    if [ "$current_ver" = "${CLI_VERSION#v}" ]; then
+      ok "Multica CLI is already $CLI_VERSION"
       return 0
     fi
-
-    info "Multica CLI $current_ver installed, latest is $latest_ver — upgrading..."
-    if command_exists brew && brew list "$BREW_PACKAGE" >/dev/null 2>&1; then
-      upgrade_cli_brew
-    else
-      install_cli_binary
-    fi
-
-    local new_ver
-    new_ver=$(multica version 2>/dev/null | awk 'NR==1{print $2}' || echo "unknown")
-    ok "Multica CLI upgraded ($current_ver → $new_ver)"
-    return 0
+    info "Multica CLI ${current_ver:-unknown} installed, Codeloom uses $CLI_VERSION — replacing..."
   fi
 
-  if command_exists brew; then
-    install_cli_brew || install_cli_binary
-  else
-    install_cli_binary
-  fi
+  install_cli_binary
+  hash -r
 
-  # Verify
-  if ! command_exists multica; then
-    fail "CLI installed but 'multica' not found on PATH. You may need to restart your shell."
+  # Another multica earlier on PATH (e.g. from Homebrew, which cannot pin a
+  # version) would keep shadowing the binary just installed.
+  local new_ver
+  new_ver=$(installed_cli_version)
+  if [ "$new_ver" != "${CLI_VERSION#v}" ]; then
+    fail "Installed $CLI_VERSION, but 'multica' on PATH is ${new_ver:+v$new_ver at }$(command -v multica || echo 'not found').
+  Remove the other copy (for Homebrew: brew uninstall multica) or restart your shell, then re-run this script."
   fi
 }
 
 # ---------------------------------------------------------------------------
-# Docker check
-# ---------------------------------------------------------------------------
-check_docker() {
-  if ! command_exists docker; then
-    printf "\n"
-    fail "Docker is not installed. Multica self-hosting requires Docker and Docker Compose.
-
-Install Docker:
-  macOS:  https://docs.docker.com/desktop/install/mac-install/
-  Linux:  https://docs.docker.com/engine/install/
-
-After installing Docker, re-run this script with --with-server."
-  fi
-
-  if ! docker info >/dev/null 2>&1; then
-    fail "Docker is installed but not running. Please start Docker and re-run this script."
-  fi
-
-  ok "Docker is available"
-}
-
-# ---------------------------------------------------------------------------
-# Server setup (self-host / --with-server)
-# ---------------------------------------------------------------------------
-setup_server() {
-  info "Setting up Multica server..."
-  local server_ref
-  server_ref=$(get_selfhost_ref)
-  info "Using self-host assets from ${server_ref}..."
-
-  if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Updating existing installation at $INSTALL_DIR..."
-    cd "$INSTALL_DIR"
-  else
-    info "Cloning Multica repository..."
-    if ! command_exists git; then
-      fail "Git is not installed. Please install git and re-run."
-    fi
-    # Remove leftover directory from a previously interrupted clone
-    if [ -d "$INSTALL_DIR" ]; then
-      warn "Removing incomplete installation at $INSTALL_DIR..."
-      rm -rf "$INSTALL_DIR"
-    fi
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-  fi
-
-  checkout_server_ref "$server_ref"
-
-  ok "Repository ready at $INSTALL_DIR ($server_ref)"
-
-  # Generate .env if needed
-  if [ ! -f .env ]; then
-    info "Creating .env with random secrets..."
-    cp .env.example .env
-    local jwt pgpass
-    jwt=$(openssl rand -hex 32)
-    pgpass=$(openssl rand -hex 24)
-    if [ "$(uname -s)" = "Darwin" ]; then
-      sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=$jwt/" .env
-      sed -i '' "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pgpass/" .env
-      sed -i '' -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$pgpass\2#" .env
-    else
-      sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$jwt/" .env
-      sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$pgpass/" .env
-      sed -i -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$pgpass\2#" .env
-    fi
-    ok "Generated .env with random JWT_SECRET and POSTGRES_PASSWORD"
-  else
-    ok "Using existing .env"
-  fi
-
-  # Start Docker Compose
-  info "Pulling official Multica images..."
-  pull_official_selfhost_images
-  info "Starting Multica services (this may take a few minutes on first run)..."
-  docker compose -f docker-compose.selfhost.yml up -d
-
-  # Read the ports Compose actually published, once, and reuse them for both the
-  # health check and the summary so the two can never disagree.
-  if ! SELFHOST_BACKEND_PORT="$(compose_published_port backend 8080)"; then
-    fail "Started the stack but could not read the backend host port from Docker Compose.
-  Check it with: cd $INSTALL_DIR && docker compose -f docker-compose.selfhost.yml ps"
-  fi
-  if ! SELFHOST_FRONTEND_PORT="$(compose_published_port frontend 3000)"; then
-    fail "Started the stack but could not read the frontend host port from Docker Compose.
-  Check it with: cd $INSTALL_DIR && docker compose -f docker-compose.selfhost.yml ps"
-  fi
-
-  # Wait for health check
-  info "Waiting for backend to be ready..."
-  local ready=false
-  for i in $(seq 1 45); do
-    if curl -sf "http://localhost:${SELFHOST_BACKEND_PORT}/health" >/dev/null 2>&1; then
-      ready=true
-      break
-    fi
-    sleep 2
-  done
-
-  if [ "$ready" = true ]; then
-    ok "Multica server is running"
-  else
-    warn "Server is still starting. You can check logs with:"
-    echo "  cd $INSTALL_DIR && docker compose -f docker-compose.selfhost.yml logs"
-    echo ""
-  fi
-}
-
-
-# ---------------------------------------------------------------------------
-# Main: Default mode (install / upgrade CLI only)
+# Main: install / switch the CLI
 # ---------------------------------------------------------------------------
 run_default() {
   printf "\n"
-  printf "${BOLD}  Multica — Installer${RESET}\n"
+  printf "${BOLD}  Multica CLI for Codeloom — Installer${RESET}\n"
   printf "\n"
 
   detect_os
@@ -433,109 +179,39 @@ run_default() {
 
   printf "\n"
   printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
-  printf "${BOLD}${GREEN}  ✓ Multica CLI is ready!${RESET}\n"
+  printf "${BOLD}${GREEN}  ✓ Multica CLI %s is ready!${RESET}\n" "$CLI_VERSION"
   printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
   printf "\n"
-  printf "  ${BOLD}Next: configure your environment${RESET}\n"
+  printf "  ${BOLD}Next: connect to your Codeloom server${RESET}\n"
   printf "\n"
-  printf "     ${CYAN}multica setup${RESET}                # Connect to Multica Cloud (multica.ai)\n"
-  printf "     ${CYAN}multica setup self-host${RESET}       # Connect to a self-hosted server\n"
+  printf "     ${CYAN}multica setup self-host --server-url <backend-url> --app-url <web-url>${RESET}\n"
+  printf "     ${CYAN}multica daemon restart --no-auto-update${RESET}   # keep the daemon on %s\n" "$CLI_VERSION"
   printf "\n"
   print_remote_server_token_hint
-  printf "  ${BOLD}Self-hosting?${RESET} Install the server first:\n"
-  printf "     curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server\n"
-  printf "\n"
-}
-
-# ---------------------------------------------------------------------------
-# Main: With-server mode (provision self-host infrastructure + install CLI)
-# ---------------------------------------------------------------------------
-run_with_server() {
-  printf "\n"
-  printf "${BOLD}  Multica — Self-Host Installer${RESET}\n"
-  printf "  Provisioning server infrastructure + installing CLI\n"
-  printf "\n"
-
-  detect_os
-  check_docker
-  setup_server
-  install_cli
-
-  printf "\n"
-  printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
-  printf "${BOLD}${GREEN}  ✓ Multica server is running and CLI is ready!${RESET}\n"
-  printf "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
-  printf "\n"
-  printf "  ${BOLD}Frontend:${RESET}  http://localhost:%s\n" "$SELFHOST_FRONTEND_PORT"
-  printf "  ${BOLD}Backend:${RESET}   http://localhost:%s\n" "$SELFHOST_BACKEND_PORT"
-  printf "  ${BOLD}Server at:${RESET} %s\n" "$INSTALL_DIR"
-  printf "\n"
-  printf "  ${BOLD}Next: configure your CLI to connect${RESET}\n"
-  printf "\n"
-  printf "     ${CYAN}multica setup self-host${RESET}   # Configure + authenticate + start daemon\n"
-  printf "\n"
-  printf "  ${BOLD}Login:${RESET} configure ${CYAN}RESEND_API_KEY${RESET} in .env for email codes,\n"
-  printf "  or read the generated code from backend logs when Resend is unset.\n"
-  printf "\n"
-  printf "  ${BOLD}To stop all services:${RESET}\n"
-  printf "     curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --stop\n"
-  printf "\n"
-}
-
-# ---------------------------------------------------------------------------
-# Stop: shut down a self-hosted installation
-# ---------------------------------------------------------------------------
-run_stop() {
-  printf "\n"
-  info "Stopping Multica services..."
-
-  if [ -d "$INSTALL_DIR" ]; then
-    cd "$INSTALL_DIR"
-    if [ -f docker-compose.selfhost.yml ]; then
-      docker compose -f docker-compose.selfhost.yml down
-      ok "Docker services stopped"
-    else
-      warn "No docker-compose.selfhost.yml found at $INSTALL_DIR"
-    fi
-  else
-    warn "No Multica installation found at $INSTALL_DIR"
-  fi
-
-  if command_exists multica; then
-    multica daemon stop 2>/dev/null && ok "Daemon stopped" || true
-  fi
-
-  printf "\n"
 }
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 main() {
-  local mode="default"
-
   while [ $# -gt 0 ]; do
     case "$1" in
-      --with-server) mode="with-server" ;;
-      --local)       mode="with-server" ;;  # backwards compat alias
-      --stop)        mode="stop" ;;
+      --with-server|--local|--stop)
+        fail "$1 is not supported: the upstream self-host server it manages does not include Codeloom's changes.
+  Deploy Codeloom from source instead: $SELFHOST_DOCS_URL"
+        ;;
       --help|-h)
-        echo "Usage: install.sh [--with-server | --stop]"
+        echo "Usage: install.sh"
         echo ""
-        echo "  (default)       Install / upgrade the Multica CLI"
-        echo "  --with-server   Install CLI + provision a self-host server (Docker)"
-        echo "  --stop          Stop a self-hosted installation"
+        echo "  Install the Multica CLI $CLI_VERSION used with Codeloom, replacing"
+        echo "  any other installed version."
         echo ""
         echo "Environment variables:"
-        echo "  MULTICA_INSTALL_DIR   Self-host server install directory"
-        echo "                        (default: \$HOME/.multica/server)"
-        echo "  MULTICA_BIN_DIR       Target directory for the CLI binary when"
-        echo "                        installing from GitHub Releases"
+        echo "  MULTICA_CLI_VERSION   CLI release to install (default: $DEFAULT_CLI_VERSION)"
+        echo "  MULTICA_BIN_DIR       Target directory for the CLI binary"
         echo "                        (default: /usr/local/bin, then \$HOME/.local/bin)"
-        echo "  MULTICA_SELFHOST_REF  Git ref to check out for self-host assets"
-        echo "                        (default: latest release tag, falling back to main)"
         echo ""
-        echo "After installation, run 'multica setup' to configure your environment."
+        echo "To deploy the Codeloom server, see $SELFHOST_DOCS_URL"
         exit 0
         ;;
       *) warn "Unknown option: $1" ;;
@@ -543,11 +219,7 @@ main() {
     shift
   done
 
-  case "$mode" in
-    default)     run_default ;;
-    with-server) run_with_server ;;
-    stop)        run_stop ;;
-  esac
+  run_default
 }
 
 main "$@"

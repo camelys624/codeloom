@@ -1,7 +1,11 @@
 "use client";
 
+// Modified for Codeloom: install the pinned CLI from the Codeloom repository
+// and point `multica setup` at this server instead of Multica Cloud.
+
 import { useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
+import { useConfigStore } from "@multica/core/config";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
 import { cn } from "@multica/ui/lib/utils";
@@ -9,8 +13,21 @@ import { copyText } from "@multica/ui/lib/clipboard";
 import { useT } from "../../i18n";
 
 const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
-const SETUP_CMD = "multica setup";
+  "curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash";
+const CLOUD_SETUP_CMD = "multica setup";
+
+function normalizeCommandURL(url: string | undefined) {
+  return url?.trim().replace(/\/+$/, "") ?? "";
+}
+
+// Mirrors the self-host commands in runtimes/ConnectRemoteDialog.
+function setupCommand(serverUrl: string | undefined, appUrl: string | undefined) {
+  const normalizedServerUrl = normalizeCommandURL(serverUrl);
+  const normalizedAppUrl = normalizeCommandURL(appUrl);
+  if (!normalizedServerUrl || !normalizedAppUrl) return CLOUD_SETUP_CMD;
+  return `multica setup self-host --server-url ${normalizedServerUrl} --app-url ${normalizedAppUrl}
+multica daemon restart --no-auto-update`;
+}
 
 function CopyButton({ text }: { text: string }) {
   const { t } = useT("onboarding");
@@ -63,15 +80,15 @@ function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
 }
 
 /**
- * CLI install instructions — two copy-and-run commands. Hardcoded because
- * there's nothing environmental to infer: step 1 is the public install
- * script, step 2 is the cloud `multica setup` which the CLI itself knows
- * the endpoints for. Local development tests a self-host variant by
- * typing the extended command directly in the terminal; no need to
- * thread env vars through React.
+ * CLI install instructions — two copy-and-run commands. Step 1 is the
+ * Codeloom install script. Step 2 connects to the daemon URLs this server
+ * publishes in its runtime config, falling back to the cloud `multica setup`
+ * when none are configured.
  */
 export function CliInstallInstructions() {
   const { t } = useT("onboarding");
+  const daemonServerUrl = useConfigStore((s) => s.daemonServerUrl);
+  const daemonAppUrl = useConfigStore((s) => s.daemonAppUrl);
   return (
     <Card className="w-full">
       <CardContent className="space-y-4 pt-4">
@@ -79,7 +96,11 @@ export function CliInstallInstructions() {
           {t(($) => $.cli_install.intro)}
         </p>
         <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={INSTALL_CMD} />
-        <Step n={2} label={t(($) => $.cli_install.step2_label)} cmd={SETUP_CMD} />
+        <Step
+          n={2}
+          label={t(($) => $.cli_install.step2_label)}
+          cmd={setupCommand(daemonServerUrl, daemonAppUrl)}
+        />
       </CardContent>
     </Card>
   );

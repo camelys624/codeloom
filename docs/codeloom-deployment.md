@@ -259,7 +259,15 @@ Caddy 自动申请和续期公开证书，需要正确 DNS 和可达的验证端
 3. 团队共用工作区应通过邀请加入，不会因为同一服务器就自动加入别人的工作区。
 4. 在独立执行机配置好 Agent CLI、模型账户和 Git 访问；不要把模型凭据复制到平台服务器来“代登录”。
 
-执行机安装与本发布兼容的 Multica CLI，当前基线为 v0.5.0。Linux amd64 可以从本次后端镜像提取同版本 CLI，不需要启动后端服务：
+执行机安装与本发布兼容的 Multica CLI，当前基线为 v0.5.0。能访问 GitHub 的执行机直接运行仓库安装脚本，它固定下载上游 v0.5.0 发布包，并替换已安装的其他版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash
+# Windows PowerShell：
+# irm https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.ps1 | iex
+```
+
+无法访问 GitHub 的 Linux amd64 执行机，可以从本次后端镜像提取同版本 CLI，不需要启动后端服务：
 
 ```bash
 # 在已导入同一发布镜像的 Linux amd64 执行机上执行。
@@ -273,7 +281,7 @@ export PATH="$HOME/.local/bin:$PATH"
 multica version
 ```
 
-其他系统使用相应平台的匹配版本二进制；不要在 Windows 原生环境执行 Linux 二进制，也不要误用上游 `--with-server` 安装命令另建一套平台。
+不要在 Windows 原生环境执行 Linux 二进制；仓库安装脚本不提供 `--with-server`，也不要改用上游安装命令另建一套平台。
 
 ```bash
 multica setup self-host \

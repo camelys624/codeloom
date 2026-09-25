@@ -1,5 +1,8 @@
 "use client";
 
+// Modified for Codeloom: install the CLI pinned to the Codeloom server release
+// and keep self-hosted daemons from auto-updating past it.
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Check, ChevronRight, Copy, Terminal } from "lucide-react";
@@ -31,7 +34,7 @@ import { useT } from "../../i18n";
 type Step = "instructions" | "success";
 
 const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
+  "curl -fsSL https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.sh | bash";
 const CLOUD_SERVER_URL = "https://api.multica.ai";
 const CLOUD_APP_URL = "https://multica.ai";
 
@@ -44,11 +47,12 @@ function daemonCommands(serverUrl: string | undefined, appUrl: string | undefine
   const normalizedAppUrl = normalizeCommandURL(appUrl);
   if (normalizedServerUrl && normalizedAppUrl) {
     return {
-      setupCmd: `multica setup self-host --server-url ${normalizedServerUrl} --app-url ${normalizedAppUrl}`,
+      setupCmd: `multica setup self-host --server-url ${normalizedServerUrl} --app-url ${normalizedAppUrl}
+multica daemon restart --no-auto-update`,
       tokenCmd: `multica config set server_url ${normalizedServerUrl}
 multica config set app_url ${normalizedAppUrl}
 multica login --token <YOUR_TOKEN>
-multica daemon start`,
+multica daemon start --no-auto-update`,
     };
   }
 
