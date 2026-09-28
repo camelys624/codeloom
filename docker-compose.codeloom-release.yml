@@ -1,0 +1,13 @@
+# Codeloom addition: pin commit-tagged images for scripts/codeloom-deploy.sh.
+# Layer AFTER docker-compose.codeloom.yml. Environment-specific settings (ports,
+# origins) stay in the env file and the optional site overlay.
+services:
+  backend:
+    image: codeloom-backend:${CODELOOM_IMAGE_TAG:?Set the release commit}
+    build: !reset null
+    pull_policy: never
+
+  frontend:
+    image: codeloom-web:${CODELOOM_IMAGE_TAG:?Set the release commit}
+    build: !reset null
+    pull_policy: never

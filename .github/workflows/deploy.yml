@@ -1,3 +1,4 @@
+# Modified for Codeloom: deploy through the Compose layout in docs/codeloom-deployment.md.
 name: Deploy production
 
 on:
@@ -9,60 +10,46 @@ concurrency:
   group: production-deploy
   cancel-in-progress: false
 
+# The server is set up once by hand (docs/codeloom-deployment.md §4-6). The
+# runner user needs Docker access, passwordless sudo for /opt/codeloom, and
+# read access to the env file.
 jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64, production]
-    timeout-minutes: 15
+    timeout-minutes: 60
+    env:
+      COMMIT: ${{ github.sha }}
+      # Must match the Compose project that owns the existing database volume.
+      CODELOOM_PROJECT: ${{ vars.CODELOOM_PROJECT || 'codeloom' }}
+      # Optional; the script finds /etc/codeloom/.env.codeloom or
+      # /opt/codeloom/.env.codeloom by itself.
+      CODELOOM_ENV_FILE: ${{ vars.CODELOOM_ENV_FILE }}
     steps:
-      - name: Update checkout
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd /opt/codeloom
-          git fetch --prune origin main
-          git reset --hard origin/main
+      - name: Checkout
+        uses: actions/checkout@v6
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: "10.28.2"
+      - name: Check deploy script failure paths
+        run: bash scripts/codeloom-deploy.test.sh
 
-      - name: Install Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
+      - name: Preflight
+        run: bash scripts/codeloom-deploy.sh preflight
 
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.6"
+      - name: Build images
+        run: bash scripts/codeloom-deploy.sh build "$COMMIT"
 
-      - name: Install dependencies
-        working-directory: /opt/codeloom
-        run: pnpm install --frozen-lockfile
+      - name: Stage release
+        run: bash scripts/codeloom-deploy.sh stage "$COMMIT"
 
-      - name: Build
-        working-directory: /opt/codeloom
-        run: pnpm run build
+      - name: Back up database
+        run: bash scripts/codeloom-deploy.sh backup
 
+      - name: Switch release
+        run: bash scripts/codeloom-deploy.sh switch "$COMMIT"
+
+      # Runs on the Compose network with the backend service's own
+      # DATABASE_URL (postgres:5432/$POSTGRES_DB), not against the runner host.
       - name: Run database migrations
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo env "PATH=$PATH" bash -c 'set -a; . /etc/codeloom.env; set +a; cd /opt/codeloom/server; go run ./cmd/migrate up'
+        run: bash scripts/codeloom-deploy.sh migrate
 
-      - name: Restart application
-        run: sudo systemctl restart codeloom
-
-      - name: Verify application
-        shell: bash
-        run: |
-          set -euo pipefail
-          for attempt in {1..20}; do
-            if curl --fail --silent --show-error http://127.0.0.1:5181/health >/dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-          sudo systemctl status codeloom --no-pager
-          exit 1
+      - name: Start and verify
+        run: bash scripts/codeloom-deploy.sh start

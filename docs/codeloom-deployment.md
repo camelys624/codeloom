@@ -409,6 +409,22 @@ curl --fail --show-error https://codeloom.cc/api/config
 
 5. 验证登录与一条真实测试任务，再恢复自动化和 worker。CLI/Agent 兼容性有变化时，先在测试 worker 升级验证，再滚动升级其他 worker。
 
+### 自动部署（GitHub Actions）
+
+合并到 `main` 后，`.github/workflows/deploy.yml` 在带 `production` 标签的 self-hosted runner 上按上面的升级顺序执行 `scripts/codeloom-deploy.sh`：
+
+1. `preflight`：检查 Docker、`/etc/codeloom/.env.codeloom`（需包含 `CODELOOM_IMAGE_TAG`、`POSTGRES_DB`）和生产覆盖文件。
+2. `build` / `stage`：在服务器本机构建 `codeloom-backend:<提交号>` / `codeloom-web:<提交号>`，并把源码解压到 `/opt/codeloom/releases/<提交号>`。同一提交号的镜像已存在时不重建。
+3. `backup`：停止前端/API，把数据库 `pg_dump` 到 runner 用户的 `~/codeloom-backups/pre-deploy-<时间>-<旧提交号>/`；仅在目标项目尚无数据卷时跳过。已有数据卷但 PostgreSQL 未运行时拒绝部署。备份或停机失败会尝试重新启动旧版本并终止部署。
+4. `switch`：更新 `CODELOOM_IMAGE_TAG`，并把 `current` 指向新 release。
+5. `migrate`：在 Compose 网络中用新 backend 镜像执行 `./migrate up`，连接 backend 服务自身的 `DATABASE_URL`，即 `postgres:5432/$POSTGRES_DB`，默认库名为 `multica`。不要在宿主机上执行迁移：PostgreSQL 不发布端口，宿主机的 `127.0.0.1:5432` 连不到它。
+6. `start`：`up -d --no-build --pull never --wait`，再检查 `http://127.0.0.1:8180/healthz`。
+
+服务器需先按第 4–6 节手动完成一次初始化。runner 用户需要能访问 Docker、能免密 `sudo` 写入 `/opt/codeloom`，并拥有 `/etc/codeloom/.env.codeloom`。
+Compose 项目名默认 `codeloom`。已有部署使用其他项目名（例如上游默认的 `multica`）时，在仓库 Actions variables 设置 `CODELOOM_PROJECT`；项目名决定数据卷，`.env.codeloom` 中的 `POSTGRES_PASSWORD` 也必须是该数据卷初始化时的密码。目标项目没有数据卷而机器上存在其他项目的 `pgdata` 卷时，`preflight` 会拒绝部署，避免启动一个空库。
+自动部署不会暂停执行机 daemon 或自动化，也不会把备份复制到异机；这些仍按第 9 节在维护流程中处理。
+失败后按上面的“回滚”处理：`CODELOOM_IMAGE_TAG` 与 `current` 链接要一起切回，部署日志会打印旧提交号和 release 路径。
+
 ### 回滚
 
 - **仅应用改动且已确认 schema 向后兼容**：停止前端/API，把源码链接和 `CODELOOM_IMAGE_TAG` 一起切回旧版本，再启动验证。
