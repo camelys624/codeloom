@@ -415,7 +415,7 @@ curl --fail --show-error https://codeloom.cc/api/config
 
 1. `preflight`：检查 Docker、`/etc/codeloom/.env.codeloom`（需包含 `CODELOOM_IMAGE_TAG`、`POSTGRES_DB`）和生产覆盖文件。
 2. `build` / `stage`：在服务器本机构建 `codeloom-backend:<提交号>` / `codeloom-web:<提交号>`，并把源码解压到 `/opt/codeloom/releases/<提交号>`。同一提交号的镜像已存在时不重建。
-3. `backup`：停止前端/API，把数据库 `pg_dump` 到 runner 用户的 `~/codeloom-backups/pre-deploy-<时间>-<旧提交号>/`；首次部署跳过。备份失败会重新启动旧版本并终止部署。
+3. `backup`：停止前端/API，把数据库 `pg_dump` 到 runner 用户的 `~/codeloom-backups/pre-deploy-<时间>-<旧提交号>/`；仅在目标项目尚无数据卷时跳过。已有数据卷但 PostgreSQL 未运行时拒绝部署。备份或停机失败会尝试重新启动旧版本并终止部署。
 4. `switch`：更新 `CODELOOM_IMAGE_TAG`，并把 `current` 指向新 release。
 5. `migrate`：在 Compose 网络中用新 backend 镜像执行 `./migrate up`，连接 backend 服务自身的 `DATABASE_URL`，即 `postgres:5432/$POSTGRES_DB`，默认库名为 `multica`。不要在宿主机上执行迁移：PostgreSQL 不发布端口，宿主机的 `127.0.0.1:5432` 连不到它。
 6. `start`：`up -d --no-build --pull never --wait`，再检查 `http://127.0.0.1:8180/healthz`。

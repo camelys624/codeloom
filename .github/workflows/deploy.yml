@@ -28,6 +28,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Check deploy script failure paths
+        run: bash scripts/codeloom-deploy.test.sh
+
       - name: Preflight
         run: bash scripts/codeloom-deploy.sh preflight
 

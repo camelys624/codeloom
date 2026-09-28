@@ -93,10 +93,14 @@ cmd_build() {
   local commit="$1"
   require_commit "$commit"
   # Release tags are immutable: never rebuild over an existing commit tag.
-  if docker image inspect "codeloom-backend:$commit" "codeloom-web:$commit" >/dev/null 2>&1; then
+  local backend_exists=0 frontend_exists=0
+  docker image inspect "codeloom-backend:$commit" >/dev/null 2>&1 && backend_exists=1
+  docker image inspect "codeloom-web:$commit" >/dev/null 2>&1 && frontend_exists=1
+  if [ "$backend_exists" -eq 1 ] && [ "$frontend_exists" -eq 1 ]; then
     info "Images for $commit already exist; skipping build"
     return
   fi
+  [ "$backend_exists" -eq 0 ] && [ "$frontend_exists" -eq 0 ] || fail "only one image exists for $commit; refusing to overwrite an immutable tag"
   docker build \
     --build-arg VERSION=v0.5.0-codeloom \
     --build-arg COMMIT="$commit" \
@@ -111,11 +115,23 @@ cmd_stage() {
   local commit="$1" release="$ROOT/releases/$1"
   require_commit "$commit"
   if [ -d "$release" ]; then
+    [ -f "$release/.codeloom-staged" ] || fail "release $release is incomplete; inspect it before retrying"
     info "Release $release already staged"
     return
   fi
-  $SUDO install -d -m 0755 "$release"
-  git -C "$SOURCE_DIR" archive --format=tar "$commit" | $SUDO tar -xf - -C "$release"
+  # Stage into a temporary directory, so a failed archive never looks like a
+  # complete release on the next deploy. Keep temp directories on this filesystem.
+  local pending="$ROOT/releases/.$commit.$$"
+  $SUDO install -d -m 0755 "$pending"
+  if ! git -C "$SOURCE_DIR" archive --format=tar "$commit" | $SUDO tar -xf - -C "$pending"; then
+    $SUDO rm -rf -- "$pending"
+    fail "failed to stage $commit"
+  fi
+  if ! printf '%s\n' "$commit" | $SUDO tee "$pending/.codeloom-staged" >/dev/null; then
+    $SUDO rm -rf -- "$pending"
+    fail "failed to mark release $commit as staged"
+  fi
+  $SUDO mv -- "$pending" "$release"
   info "Staged $release"
 }
 
@@ -125,30 +141,39 @@ cmd_backup() {
   local postgres
   postgres=$(project_container postgres)
   if [ -z "$postgres" ]; then
-    info "No running $PROJECT PostgreSQL container; skipping pre-deploy backup"
+    # A stopped database is not a first deployment. Do not skip the backup and
+    # then migrate the existing volume without a recovery point.
+    if docker volume inspect "${PROJECT}_pgdata" >/dev/null 2>&1; then
+      fail "PostgreSQL is not running; refusing to migrate existing $PROJECT database without a backup"
+    fi
+    info "No existing $PROJECT PostgreSQL volume; skipping pre-deploy backup"
     return
   fi
   local target
   target="$BACKUP_DIR/pre-deploy-$(date -u +%Y%m%dT%H%M%SZ)-$(current_release || echo unversioned)"
   (umask 077 && mkdir -p "$target")
-  local app
-  app=$(project_container frontend; project_container backend)
+  APP_CONTAINERS=$({ project_container frontend; project_container backend; } | tr '\n' ' ')
   info "Stopping frontend/backend and backing up the database to $target"
+  # Install the recovery trap before stopping either container: docker stop
+  # can fail after it has already stopped the first one.
+  trap restart_app_containers ERR
   # shellcheck disable=SC2086 # one container id per word
-  [ -z "$app" ] || docker stop $app >/dev/null
-  # A failed backup leaves the old release as it was, running.
-  # shellcheck disable=SC2064,SC2086
-  trap "[ -z '$app' ] || docker start $app >/dev/null || true" ERR
+  [ -z "${APP_CONTAINERS// /}" ] || docker stop $APP_CONTAINERS >/dev/null
   (umask 077 && docker exec "$postgres" sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' >"$target/postgres.dump")
   docker exec -i "$postgres" pg_restore --list <"$target/postgres.dump" >/dev/null
   trap - ERR
   info "Backup written. Previous release: $(current_release || echo "none (containers started from $ROOT)")"
 }
 
+restart_app_containers() {
+  # shellcheck disable=SC2086 # one container id per word
+  [ -z "${APP_CONTAINERS// /}" ] || docker start $APP_CONTAINERS >/dev/null || true
+}
+
 cmd_switch() {
   local commit="$1"
   require_commit "$commit"
-  [ -d "$ROOT/releases/$commit" ] || fail "release $commit is not staged"
+  [ -f "$ROOT/releases/$commit/.codeloom-staged" ] || fail "release $commit is not completely staged"
   info "Switching from $(current_release || echo none) to $commit"
   $SUDO ln -sfn "$ROOT/releases/$commit" "$ROOT/current"
   # Keep a manual `codeloom` shell function (docs §5) on the same release.
