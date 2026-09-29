@@ -33,10 +33,12 @@ codeloom() {
 
 codeloom up -d --build
 codeloom ps
-curl --fail http://192.168.31.234:8180/healthz
+curl --fail http://192.168.31.234:3100/health
 ```
 
-打开 **http://192.168.31.234:3100/login**。前端/API 只发布到指定的 LAN IPv4，
+打开 **http://192.168.31.234:3100/login**。浏览器、CLI/daemon 与 webhook 都走这个入口，
+由前端运行时代理把 `/api`、`/ws`、`/health` 等转发给后端；后端端口（默认 8180）
+只用于本机健康检查，不对客户端公布。前端/API 只发布到指定的 LAN IPv4，
 数据库不发布端口；容器内部服务监听可达接口。WSL 用户仍需确保 Windows 防火墙、
 WSL 网络模式及路由允许其他设备访问；本机访问成功不等于已经证明跨设备可达。
 
@@ -46,7 +48,7 @@ WSL 网络模式及路由允许其他设备访问；本机访问成功不等于�
 自定义输出路径用 `--output`，不要把私密配置提交到 Git。
 
 入口配置为 `CODELOOM_PUBLIC_ORIGIN`，避免继承旧 Codeloom 的 `PUBLIC_ORIGIN`。
-修改地址时同步修改 `PUBLIC_HOST`、`FRONTEND_PORT` 和必要的 `BIND_ADDRESS`，
+修改地址时同步修改 `FRONTEND_PORT` 和必要的 `BIND_ADDRESS`，
 然后重建容器。Compose 仍遵循标准的 shell 环境优先级；不要混用其他部署的环境变量。
 两个容器均不终止 TLS；HTTPS 域名需要自己的 TLS 反向代理，
 并把 `FRONTEND_PORT` 改成代理转发到的内部 HTTP 端口。
@@ -75,7 +77,7 @@ WSL 网络模式及路由允许其他设备访问；本机访问成功不等于�
   # irm https://raw.githubusercontent.com/camelys624/codeloom/main/scripts/install.ps1 | iex
 
   multica setup self-host \
-    --server-url http://192.168.31.234:8180 \
+    --server-url http://192.168.31.234:3100 \
     --app-url http://192.168.31.234:3100
   # setup 会启动 daemon；关闭自动更新，避免 CLI 自行升级脱离 v0.5.0 基线。
   multica daemon restart --no-auto-update

@@ -22,10 +22,11 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       FRONTEND_ORIGIN: ${CODELOOM_PUBLIC_ORIGIN:?Set the browser-facing origin}
       MULTICA_APP_URL: ${CODELOOM_PUBLIC_ORIGIN:?Set the browser-facing origin}
-      # Direct daemon/webhook access uses HTTP: the backend does not terminate TLS.
-      # PUBLIC_HOST is the hostname extracted from CODELOOM_PUBLIC_ORIGIN by the generator.
-      MULTICA_PUBLIC_URL: http://${PUBLIC_HOST:?Set the hostname from CODELOOM_PUBLIC_ORIGIN}:${BACKEND_PORT:-8180}
-      MULTICA_DAEMON_SERVER_URL: http://${PUBLIC_HOST:?Set the hostname from CODELOOM_PUBLIC_ORIGIN}:${BACKEND_PORT:-8180}
+      # Daemons and webhooks enter through the same origin as browsers (the
+      # frontend runtime proxy, or the TLS reverse proxy in front of it); the
+      # published backend port is for local health checks, never advertised.
+      MULTICA_PUBLIC_URL: ${CODELOOM_PUBLIC_ORIGIN:?Set the browser-facing origin}
+      MULTICA_DAEMON_SERVER_URL: ${CODELOOM_PUBLIC_ORIGIN:?Set the browser-facing origin}
       CORS_ALLOWED_ORIGINS: ${CODELOOM_PUBLIC_ORIGIN:?Set the browser-facing origin}
       COOKIE_DOMAIN: ""
       APP_ENV: production

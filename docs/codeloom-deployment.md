@@ -10,7 +10,7 @@
 
 ```text
 浏览器 ── HTTPS ──> Caddy（云服务器上的 80/443）
-                       ├── /ws、/ws/* ──> Go API：127.0.0.1:8180
+                       ├── /ws、/ws/*、/api/daemon/ws ──> Go API：127.0.0.1:8180
                        └── 其他请求 ────> Next.js：127.0.0.1:3100
                                              └── API 代理 ──> backend:8080
                                                                │
@@ -18,7 +18,7 @@
                                                        不发布宿主机端口
 
 独立执行机：Multica daemon + OMP / Claude 等 CLI + Git worktree
-                   └── 主动通过 HTTPS / WebSocket 连接平台
+                   └── 主动通过 HTTPS / WebSocket 连接同一域名入口（不直连 8180）
 ```
 
 以下是起步估算，不是负载测试得出的容量承诺：
@@ -132,7 +132,6 @@ printf '\nCODELOOM_IMAGE_TAG=%s\n' "$CODELOOM_IMAGE_TAG" >> /etc/codeloom/.env.c
 
 ```dotenv
 CODELOOM_PUBLIC_ORIGIN=https://codeloom.cc
-PUBLIC_HOST=codeloom.cc
 BIND_ADDRESS=127.0.0.1
 FRONTEND_PORT=3100
 BACKEND_PORT=8180
@@ -155,7 +154,7 @@ SMTP_TLS_INSECURE=false
 ## 5. 生产 Compose 覆盖配置
 
 保存以下内容为 `/etc/codeloom/compose.production.yml`。它必须叠加在三个仓库 Compose 文件之后。
-当前 LAN overlay 的 daemon/public URL 是 `http://域名:8180`；**只改 origin 不够**，这里显式覆盖成 HTTPS 单域名入口。
+仓库 overlay 已把 daemon/public URL 设为 `CODELOOM_PUBLIC_ORIGIN`，CLI、daemon 与 webhook 与浏览器一样经 Caddy 进入；8180 只绑定回环地址，供本机健康检查和 Caddy 转发。
 `build: !reset null` 和 `pull_policy: never` 防止线上意外源码构建或拉取错误版本。
 
 ```yaml
@@ -174,9 +173,6 @@ services:
     pull_policy: never
     ports: !override
       - "127.0.0.1:8180:8080"
-    environment:
-      MULTICA_PUBLIC_URL: ${CODELOOM_PUBLIC_ORIGIN:?Set the HTTPS origin}
-      MULTICA_DAEMON_SERVER_URL: ${CODELOOM_PUBLIC_ORIGIN:?Set the HTTPS origin}
     logging: *bounded-logs
 
   frontend:
@@ -222,7 +218,7 @@ curl --fail --show-error http://127.0.0.1:3100/api/config
 
 ```caddyfile
 codeloom.cc {
-    @multica_ws path /ws /ws/*
+    @multica_ws path /ws /ws/* /api/daemon/ws
     handle @multica_ws {
         reverse_proxy 127.0.0.1:8180 {
             flush_interval -1
@@ -438,8 +434,8 @@ Compose 项目名默认 `codeloom`。已有部署使用其他项目名（例如�
 | --- | --- |
 | Caddy 证书申请失败 | DNS A/AAAA、80/443 可达性、其他进程占用端口、Caddy 日志 |
 | 登录写操作或 WS 返回 403 | `CODELOOM_PUBLIC_ORIGIN`、后端 Origin/CORS、浏览器实际访问域名是否一致 |
-| 页面能开但实时数据不更新 | `/ws`、`/ws/*` 转发与 `101`；代理是否支持长连接 |
-| daemon 被指向 HTTP 8180 | 生产 overlay 是否最后加载，两个公开 URL 是否覆盖成 HTTPS |
+| 页面能开但实时数据不更新 | `/ws`、`/ws/*`、`/api/daemon/ws` 转发与 `101`；代理是否支持长连接 |
+| daemon/setup 命令指向 `:8180` | `curl https://域名/api/config` 的 `daemon_server_url` 应等于 `CODELOOM_PUBLIC_ORIGIN`；否则服务器运行的是旧版 overlay，重新部署 |
 | 验证码收不到 | SMTP/发件人校验、提供商发送日志、网络与 TLS；不启用固定码绕过 |
 | 任务长期排队 | 执行机在线、Agent/runtime 绑定、并发额度、目录锁；不是单纯加大平台服务器 |
 | 更新后仍是旧界面 | 容器镜像标签与发布提交、是否错误拉取官方镜像、浏览器刷新 |
