@@ -18,7 +18,7 @@ Options:
   --origin         Required http(s) origin, without path, query, credentials, or fragment.
   --email          Required team email; comma-separated addresses are also accepted.
   --bind-address   Specific local IPv4; required for a domain origin (never 0.0.0.0).
-  --backend-port   Direct backend/daemon host port (default: 8180).
+  --backend-port   Backend host port for local health checks (default: 8180).
   --output         New output file (default: .env.codeloom); never overwrites a file.
   --help           Show this help.
 
@@ -29,7 +29,7 @@ Requires Docker Compose >= 2.24.4. Build and start the source images explicitly:
 The frontend host port is taken from --origin (HTTP 80 / HTTPS 443 if omitted).
 HTTPS needs your own TLS-terminating LAN reverse proxy; the containers serve HTTP.
 Behind that proxy, edit FRONTEND_PORT to an unused internal port and forward to it.
-Direct backend/daemon URLs always use HTTP on the origin hostname and backend port.
+Daemons, CLI and webhooks use the origin too; the backend port is not advertised.
 Restrict both published ports to the trusted LAN; Docker may bypass host firewalls.
 No SMTP configured: upstream prints random verification codes in backend logs.
 Configure SMTP in the generated env for routine team access; protect those logs.
@@ -95,10 +95,9 @@ try {
     }
     const content = `# Codeloom modification of Multica v0.5.0; generated private configuration.
 # Do not commit or share. Back up these keys alongside the database.
-# Keep PUBLIC_HOST and FRONTEND_PORT in sync with CODELOOM_PUBLIC_ORIGIN when editing.
+# Keep FRONTEND_PORT in sync with CODELOOM_PUBLIC_ORIGIN when editing.
 # Namespaced to avoid the original Codeloom's inherited PUBLIC_ORIGIN.
 CODELOOM_PUBLIC_ORIGIN=${origin.origin}
-PUBLIC_HOST=${origin.hostname}
 BIND_ADDRESS=${bindAddress}
 FRONTEND_PORT=${frontendPort}
 BACKEND_PORT=${backendPort}
