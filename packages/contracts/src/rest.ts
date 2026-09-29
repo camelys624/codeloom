@@ -2,13 +2,18 @@ import { z } from 'zod';
 import {
   AgentProfileSchema,
   ApprovalDecisionSchema,
+  ApprovalKindSchema,
   ApprovalRequestSchema,
   ArtifactKindSchema,
   AttemptSchema,
+  DeviceNameSchema,
+  DeviceSchema,
+  FirmwareVersionSchema,
   FrozenRunSpecSchema,
   RepositoryAccessSchema,
   RunConfigSchema,
   RunSchema,
+  RunStatusSchema,
   RunnerKindSchema,
   RunnerSchema,
   TaskPrioritySchema,
@@ -214,6 +219,80 @@ export const CreateRunnerOutputSchema = z.strictObject({
   expiresAt: TimestampSchema,
 });
 export type CreateRunnerOutput = z.infer<typeof CreateRunnerOutputSchema>;
+
+export const CreateDeviceInputSchema = z.strictObject({
+  name: DeviceNameSchema,
+});
+export type CreateDeviceInput = z.infer<typeof CreateDeviceInputSchema>;
+export const CreateDeviceOutputSchema = z.strictObject({
+  device: DeviceSchema,
+  pairingCode: NameSchema,
+  expiresAt: TimestampSchema,
+});
+export type CreateDeviceOutput = z.infer<typeof CreateDeviceOutputSchema>;
+export const PairDeviceInputSchema = z.strictObject({
+  pairingCode: NameSchema,
+  name: DeviceNameSchema,
+  firmwareVersion: FirmwareVersionSchema,
+});
+export type PairDeviceInput = z.infer<typeof PairDeviceInputSchema>;
+export const PairDeviceOutputSchema = z.strictObject({
+  deviceId: IdSchema,
+  workspaceId: IdSchema,
+  workspaceName: NameSchema,
+  deviceToken: NameSchema,
+});
+export type PairDeviceOutput = z.infer<typeof PairDeviceOutputSchema>;
+
+/** Hard serialized-size budget of the device overview response. */
+export const DEVICE_OVERVIEW_MAX_BYTES = 8192;
+export const DEVICE_OVERVIEW_MAX_APPROVALS = 8;
+export const DEVICE_OVERVIEW_MAX_TASKS = 12;
+/** Code-point limits; truncated strings end with `…` and stay within the limit. */
+export const DEVICE_TEXT_LIMITS = {
+  workspaceName: 40,
+  approvalTitle: 96,
+  approvalDetail: 200,
+  taskTitle: 60,
+} as const;
+const deviceText = (maxCodePoints: number) =>
+  z
+    .string()
+    .refine(
+      (value) => Array.from(value).length <= maxCodePoints,
+      `Text exceeds ${maxCodePoints} characters`,
+    );
+export const DeviceOverviewApprovalSchema = z.strictObject({
+  id: IdSchema,
+  kind: ApprovalKindSchema,
+  title: deviceText(DEVICE_TEXT_LIMITS.approvalTitle),
+  detail: deviceText(DEVICE_TEXT_LIMITS.approvalDetail),
+  taskTitle: deviceText(DEVICE_TEXT_LIMITS.taskTitle),
+  runId: IdSchema,
+  createdAt: TimestampSchema,
+  expiresAt: TimestampSchema,
+});
+export type DeviceOverviewApproval = z.infer<
+  typeof DeviceOverviewApprovalSchema
+>;
+export const DeviceOverviewTaskSchema = z.strictObject({
+  id: IdSchema,
+  title: deviceText(DEVICE_TEXT_LIMITS.taskTitle),
+  status: TaskStatusSchema,
+  runStatus: RunStatusSchema.nullable(),
+});
+export type DeviceOverviewTask = z.infer<typeof DeviceOverviewTaskSchema>;
+export const DeviceOverviewSchema = z.strictObject({
+  serverTime: TimestampSchema,
+  workspaceName: deviceText(DEVICE_TEXT_LIMITS.workspaceName),
+  approvalsTotal: CountSchema,
+  approvals: z
+    .array(DeviceOverviewApprovalSchema)
+    .max(DEVICE_OVERVIEW_MAX_APPROVALS),
+  tasksTotal: CountSchema,
+  tasks: z.array(DeviceOverviewTaskSchema).max(DEVICE_OVERVIEW_MAX_TASKS),
+});
+export type DeviceOverview = z.infer<typeof DeviceOverviewSchema>;
 export const CreateAgentProfileInputSchema = AgentProfileSchema.pick({
   runnerId: true,
   engine: true,

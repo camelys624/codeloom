@@ -3,9 +3,12 @@ import {
   ApprovalRequestSchema,
   AttemptSchema,
   CreateAgentProfileInputSchema,
+  CreateDeviceInputSchema,
+  CreateDeviceOutputSchema,
   CreateRunnerInputSchema,
   CreateRunnerOutputSchema,
   CreateRunInputSchema,
+  DeviceSchema,
   EventsOutputSchema,
   MeOutputSchema,
   PromptInputSchema,
@@ -22,8 +25,10 @@ import {
   type AgentProfile,
   type ApprovalRequest,
   type CreateAgentProfileInput,
+  type CreateDeviceInput,
   type CreateRunnerInput,
   type CreateRunInput,
+  type Device,
   type MeOutput,
   type RegisterRepositoryInput,
   type Repository,
@@ -210,6 +215,35 @@ export const api = {
       },
       CreateRunnerOutputSchema.parse,
     ),
+  devices: () =>
+    request(
+      '/api/v1/devices',
+      {},
+      parseArray({
+        parse(value: unknown): Device[] {
+          return Array.isArray(value)
+            ? value.map((item) => DeviceSchema.parse(item))
+            : (() => {
+                throw new Error('Invalid device list');
+              })();
+        },
+      }),
+    ),
+  createDevice: (input: CreateDeviceInput) =>
+    request(
+      '/api/v1/devices',
+      {
+        method: 'POST',
+        body: JSON.stringify(CreateDeviceInputSchema.parse(input)),
+      },
+      CreateDeviceOutputSchema.parse,
+    ),
+  revokeDevice: (id: string) =>
+    request(
+      `/api/v1/devices/${encodeURIComponent(id)}/revoke`,
+      { method: 'POST', body: JSON.stringify({}) },
+      DeviceSchema.parse,
+    ),
   profiles: () =>
     request(
       '/api/v1/agent-profiles',
@@ -304,6 +338,7 @@ export const api = {
 export type {
   AgentProfile,
   ApprovalRequest,
+  Device,
   MeOutput,
   Repository,
   RunSnapshot,

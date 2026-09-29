@@ -909,12 +909,14 @@ button:disabled {
   background: var(--surface-muted);
   font-size: 12px;
 }
-.badge.online {
+.badge.online,
+.badge.active {
   background: #dcfce7;
   color: #166534;
 }
 .badge.failed,
-.badge.lost {
+.badge.lost,
+.badge.revoked {
   background: #fee2e2;
   color: #991b1b;
 }

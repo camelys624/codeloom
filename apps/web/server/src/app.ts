@@ -26,13 +26,17 @@ import {
   ClaimAttemptsInputSchema,
   CreateAgentProfileInputSchema,
   CreateRunInputSchema,
+  CreateDeviceInputSchema,
   CreateRunnerInputSchema,
+  DEVICE_OVERVIEW_MAX_APPROVALS,
+  DEVICE_OVERVIEW_MAX_TASKS,
   CreateTaskInputSchema,
   EventsQuerySchema,
   EventNackSchema,
   EventAckSchema,
   FrozenRunSpecSchema,
   MeOutputSchema,
+  PairDeviceInputSchema,
   PairRunnerInputSchema,
   PermissionModeSchema,
   PromptInputSchema,
@@ -91,12 +95,14 @@ import {
   mapRepository,
   mapRun,
   mapRunEvent,
+  mapDevice,
   mapRunner,
   mapTask,
   mapTurn,
   mapUser,
   mapWorkspace,
 } from './mapping.js';
+import { serializeDeviceOverview } from './device-overview.js';
 
 export interface ServerConfig {
   databaseUrl: string;
@@ -129,6 +135,8 @@ type RunnerContext = {
   maxConcurrency: number;
 };
 
+type DeviceAuth = { auth: AuthContext; deviceId: string };
+
 type RequestWithAuth = FastifyRequest & { auth?: AuthContext };
 type RequestWithRunner = FastifyRequest & { runner?: RunnerContext };
 type Row = Record<string, any>;
@@ -154,6 +162,8 @@ const TOKEN_ROTATION_GRACE_MS = 60_000;
 const PAIRING_TTL_MS = 10 * 60_000;
 const AUTH_SESSION_MS = 14 * 24 * 60 * 60_000;
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const DEVICE_TOKEN_PREFIX = 'awd_';
+const DEVICE_LAST_SEEN_THROTTLE_SECONDS = 30;
 
 function envBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
@@ -452,6 +462,63 @@ export async function buildApp(
       return undefined;
     }
     return auth;
+  }
+
+  /**
+   * Device bearer tokens act as the member who created the device. Only the
+   * device overview and approval resolve routes call this; every other user
+   * route keeps resolving identity from the session cookie alone.
+   */
+  async function deviceContext(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<DeviceAuth | undefined> {
+    const authorization = request.headers.authorization;
+    if (!authorization?.startsWith(`Bearer ${DEVICE_TOKEN_PREFIX}`)) {
+      reply
+        .code(401)
+        .send(errorBody('unauthorized', 'Device bearer token required'));
+      return undefined;
+    }
+    const result = await pool.query<Row>(
+      `SELECT d.id AS device_id, d.last_seen_at AS device_last_seen_at,
+              u.*, w.id AS workspace_id, w.name AS workspace_name, w.slug AS workspace_slug,
+              w.created_at AS workspace_created_at, wm.role AS member_role
+       FROM devices d
+       JOIN workspace_members wm ON wm.workspace_id = d.workspace_id AND wm.user_id = d.created_by
+       JOIN users u ON u.id = wm.user_id
+       JOIN workspaces w ON w.id = d.workspace_id
+       WHERE d.token_hash = $1 AND d.status = 'active'`,
+      [hashToken(authorization.slice(7))],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      reply.code(401).send(errorBody('unauthorized', 'Invalid device token'));
+      return undefined;
+    }
+    await pool.query(
+      `UPDATE devices SET last_seen_at = now()
+       WHERE id = $1 AND status = 'active'
+         AND (last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => $2))`,
+      [row.device_id, DEVICE_LAST_SEEN_THROTTLE_SECONDS],
+    );
+    return {
+      deviceId: String(row.device_id),
+      auth: {
+        user: mapUser(row),
+        workspace: mapWorkspace({
+          id: row.workspace_id,
+          name: row.workspace_name,
+          slug: row.workspace_slug,
+          created_at: row.workspace_created_at,
+        }),
+        membership: mapMembership({
+          workspace_id: row.workspace_id,
+          user_id: row.id,
+          role: row.member_role,
+        }),
+      },
+    };
   }
 
   async function getRunSnapshot(runId: string, workspaceId: string) {
@@ -1411,6 +1478,168 @@ export async function buildApp(
     else reply.code(204).send();
   });
 
+  app.get('/api/v1/devices', async (request, reply) => {
+    const auth = await requireAuth(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const result = await pool.query<Row>(
+      'SELECT * FROM devices WHERE workspace_id = $1 ORDER BY created_at, id',
+      [auth.workspace.id],
+    );
+    reply.send(result.rows.map(mapDevice));
+  });
+
+  app.post('/api/v1/devices', async (request, reply) => {
+    const auth = await ensureWorkspace(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const body = parseBody(CreateDeviceInputSchema, request.body);
+    const pairingCode = newToken('pair_', 16);
+    const row = await transaction(pool, async (client) => {
+      const device = one(
+        await client.query<Row>(
+          `INSERT INTO devices (workspace_id, name, created_by) VALUES ($1, $2, $3) RETURNING *`,
+          [auth.workspace.id, body.name, auth.user.id],
+        ),
+        'Device insert failed',
+      );
+      await client.query(
+        `INSERT INTO device_pairing_codes (workspace_id, device_id, code_hash, expires_at, created_by)
+         VALUES ($1, $2, $3, now() + interval '10 minutes', $4)`,
+        [auth.workspace.id, device.id, hashToken(pairingCode), auth.user.id],
+      );
+      return device;
+    });
+    reply.code(201).send({
+      device: mapDevice(row),
+      pairingCode,
+      expiresAt: new Date(Date.now() + PAIRING_TTL_MS).toISOString(),
+    });
+  });
+
+  app.post('/api/v1/devices/pair', async (request, reply) => {
+    const body = parseBody(PairDeviceInputSchema, request.body);
+    const result = await transaction(pool, async (client) => {
+      const pairing = one(
+        await client.query<Row>(
+          `SELECT * FROM device_pairing_codes WHERE code_hash = $1 AND used_at IS NULL AND expires_at > now() FOR UPDATE`,
+          [hashToken(body.pairingCode)],
+        ),
+        'Pairing code is invalid or expired',
+      );
+      const deviceToken = newToken(DEVICE_TOKEN_PREFIX, 32);
+      const device = one(
+        await client.query<Row>(
+          `UPDATE devices SET name = $3, firmware_version = $4, token_hash = $5,
+                  status = 'active', paired_at = now()
+           WHERE id = $1 AND workspace_id = $2 AND status = 'pending' RETURNING *`,
+          [
+            pairing.device_id,
+            pairing.workspace_id,
+            body.name,
+            body.firmwareVersion || null,
+            hashToken(deviceToken),
+          ],
+        ),
+        'Device pairing failed',
+      );
+      await client.query(
+        `UPDATE device_pairing_codes SET used_at = now() WHERE id = $1`,
+        [pairing.id],
+      );
+      const workspace = one(
+        await client.query<Row>('SELECT name FROM workspaces WHERE id = $1', [
+          device.workspace_id,
+        ]),
+        'Workspace not found',
+      );
+      return { device, workspace, deviceToken };
+    });
+    reply.send({
+      deviceId: result.device.id,
+      workspaceId: result.device.workspace_id,
+      workspaceName: result.workspace.name,
+      deviceToken: result.deviceToken,
+    });
+  });
+
+  app.post('/api/v1/devices/:id/revoke', async (request, reply) => {
+    const auth = await ensureWorkspace(request as RequestWithAuth, reply);
+    if (!auth) return;
+    const deviceId = String((request.params as { id: string }).id);
+    const row = one(
+      await pool.query<Row>(
+        `UPDATE devices SET status = 'revoked', token_hash = NULL, revoked_at = COALESCE(revoked_at, now())
+         WHERE id = $1 AND workspace_id = $2 RETURNING *`,
+        [deviceId, auth.workspace.id],
+      ),
+      'Device not found',
+    );
+    reply.send(mapDevice(row));
+  });
+
+  app.get('/api/v1/device/overview', async (request, reply) => {
+    const device = await deviceContext(request, reply);
+    if (!device) return;
+    const workspaceId = device.auth.workspace.id;
+    const [approvalsTotal, approvals, tasksTotal, tasks] = await Promise.all([
+      pool.query<Row>(
+        `SELECT count(*)::int AS total FROM approval_requests WHERE workspace_id = $1 AND status = 'pending'`,
+        [workspaceId],
+      ),
+      pool.query<Row>(
+        `SELECT a.id, a.kind, a.title, a.payload, a.run_id, a.created_at, a.expires_at, t.title AS task_title
+         FROM approval_requests a
+         JOIN runs r ON r.workspace_id = a.workspace_id AND r.id = a.run_id
+         JOIN tasks t ON t.workspace_id = r.workspace_id AND t.id = r.task_id
+         WHERE a.workspace_id = $1 AND a.status = 'pending'
+         ORDER BY a.created_at, a.id
+         LIMIT $2`,
+        [workspaceId, DEVICE_OVERVIEW_MAX_APPROVALS],
+      ),
+      pool.query<Row>(
+        'SELECT count(*)::int AS total FROM tasks WHERE workspace_id = $1',
+        [workspaceId],
+      ),
+      pool.query<Row>(
+        `SELECT t.id, t.title, t.status, latest.status AS run_status
+         FROM tasks t
+         LEFT JOIN LATERAL (
+           SELECT r.status FROM runs r
+           WHERE r.workspace_id = t.workspace_id AND r.task_id = t.id
+           ORDER BY r.created_at DESC, r.id DESC
+           LIMIT 1
+         ) latest ON true
+         WHERE t.workspace_id = $1
+         ORDER BY t.status IN ('done', 'canceled'), t.updated_at DESC, t.id
+         LIMIT $2`,
+        [workspaceId, DEVICE_OVERVIEW_MAX_TASKS],
+      ),
+    ]);
+    reply.type('application/json; charset=utf-8').send(
+      serializeDeviceOverview({
+        serverTime: new Date().toISOString(),
+        workspaceName: device.auth.workspace.name,
+        approvalsTotal: Number(approvalsTotal.rows[0]?.total ?? 0),
+        approvals: approvals.rows.map((row) => ({
+          id: String(row.id),
+          kind: row.kind,
+          title: String(row.title),
+          payload: row.payload,
+          taskTitle: String(row.task_title),
+          runId: String(row.run_id),
+          createdAt: iso(row.created_at),
+          expiresAt: iso(row.expires_at),
+        })),
+        tasksTotal: Number(tasksTotal.rows[0]?.total ?? 0),
+        tasks: tasks.rows.map((row) => ({
+          id: String(row.id),
+          title: String(row.title),
+          status: row.status,
+          runStatus: row.run_status ?? null,
+        })),
+      }),
+    );
+  });
+
   app.get('/api/v1/agent-profiles', async (request, reply) => {
     const auth = await requireAuth(request as RequestWithAuth, reply);
     if (!auth) return;
@@ -1861,7 +2090,13 @@ export async function buildApp(
   });
 
   app.post('/api/v1/approvals/:id/resolve', async (request, reply) => {
-    const auth = await ensureWorkspace(request as RequestWithAuth, reply);
+    // Bearer requests are device calls (no cookie, so no Origin check);
+    // everything else is a browser session subject to CSRF protection.
+    const bearer = request.headers.authorization?.startsWith('Bearer ');
+    const device = bearer ? await deviceContext(request, reply) : undefined;
+    const auth = bearer
+      ? device?.auth
+      : await ensureWorkspace(request as RequestWithAuth, reply);
     if (!auth) return;
     const body = parseBody(ResolveApprovalInputSchema, request.body);
     const approvalId = String((request.params as { id: string }).id);
@@ -1909,6 +2144,20 @@ export async function buildApp(
         [approval.turn_id],
       );
       await projectRun(client, attempt.run_id, 'running');
+      await client.query(
+        `INSERT INTO audit_events (workspace_id, actor_type, actor_id, entity_type, entity_id, kind, data)
+         VALUES ($1, 'human', $2, 'approval', $3, 'approval.resolved', $4)`,
+        [
+          auth.workspace.id,
+          auth.user.id,
+          approvalId,
+          {
+            decision: body.decision,
+            via: device ? 'device' : 'web',
+            ...(device ? { deviceId: device.deviceId } : {}),
+          },
+        ],
+      );
       return updated;
     });
     const approval = mapApproval(result);

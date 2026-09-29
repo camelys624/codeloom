@@ -16,7 +16,7 @@ Runner 本地文件    凭据、仓库映射、活跃 Attempt 记录、未确认
 
 ## 2. 表
 
-所有租户表带 `workspace_id`、`created_at`；可变表带 `updated_at`。主键为带前缀的随机 id（`ws_`、`usr_`、`repo_`、`rnr_`、`agp_`、`task_`、`run_`、`att_`、`trn_`、`apr_`、`art_`）。
+所有租户表带 `workspace_id`、`created_at`；可变表带 `updated_at`。主键为带前缀的随机 id（`ws_`、`usr_`、`repo_`、`rnr_`、`dev_`、`agp_`、`task_`、`run_`、`att_`、`trn_`、`apr_`、`art_`）。
 
 ```sql
 workspaces            (id, name, slug, created_at)
@@ -32,6 +32,10 @@ runners               (id, workspace_id, name, kind, status, daemon_version, os,
                        previous_token_expires_at, last_seen_at, created_by, created_at, revoked_at)
 runner_pairing_codes  (id, workspace_id, runner_id, code_hash, expires_at, used_at, created_by, created_at)
 runner_repositories   (workspace_id, runner_id, repository_id, access, reported_at, created_at, updated_at)  PK(runner_id, repository_id)
+
+devices               (id, workspace_id, name, status, token_hash UNIQUE, firmware_version,
+                       created_by, created_at, updated_at, paired_at, last_seen_at, revoked_at)
+device_pairing_codes  (id, workspace_id, device_id, code_hash UNIQUE, expires_at, used_at, created_by, created_at)
 
 agent_profiles        (id, workspace_id, runner_id, engine, display_name, launch JSONB,
                        default_model, capability_snapshot JSONB, capability_reported_at,
@@ -86,6 +90,9 @@ tasks               (workspace_id, status, updated_at DESC)
 run_events          (run_id, created_at)
 approval_requests   (workspace_id, status, created_at)
 audit_events        (workspace_id, entity_type, entity_id, created_at)
+devices             (workspace_id, created_at)
+devices             (token_hash)                 UNIQUE，设备 bearer 查找
+device_pairing_codes(expires_at)
 ```
 
 `runs` 中的 `runner_id`、`agent_profile_id`、`repository_id`、`base_commit_sha` 是 `frozen_spec` 的冗余列，供查询用；`frozen_spec` 是权威。`attempts.agent_profile_id` 冗余是为了领取 SQL 的 profile 并发检查。
@@ -134,6 +141,14 @@ POST /api/v1/tasks/{taskId}/runs
 
 一个事务：校验同上，插入 `transcript_chunks`，`last_chunk_seq = chunk_seq`，`pg_notify('aw_run', …)`。转写块不更新任何状态。
 
+### 处理审批
+
+`POST /api/v1/approvals/{id}/resolve` 由浏览器（session + `Origin`）或已配对设备（`Bearer awd_…`）调用。一个事务：`SELECT … FOR UPDATE` 该 ApprovalRequest，非 `pending` 返回 409；写 `status`、`decided_by`（设备调用时为设备创建者）、`decided_at`；追加 `approval.resolved` 服务端事件；Attempt、Turn 从 `waiting_approval` 回到 `running` 并更新 Run 投影；插入 `audit_events`（`data.via` 为 `web` 或 `device`，设备另记 `deviceId`）。提交后把决定发给 Runner。
+
+### 设备配对
+
+`POST /api/v1/devices/pair` 一个事务：锁定未使用且未过期的配对码，把 `pending` 设备置为 `active` 并写入 token hash、名称、固件版本与 `paired_at`，标记配对码已使用。设备已撤销或配对码无效、过期、已用时返回 404。
+
 ## 4. 事件表与转写表的分工
 
 | | `run_events` | `transcript_chunks` |
@@ -166,6 +181,12 @@ GET /api/v1/attempts/{attemptId}/transcript?beforeChunk=<chunkSeq>&limit=200    
 ```
 
 游标都以 Attempt 为作用域。快照中的 `lastSequence`、`lastChunkSeq` 来自 `attempts` 表的同名列，作为快照的附加字段返回，不进入 Attempt 实体类型。前端不把当前画面当作状态来源；浏览器侧"先订阅并缓冲、再快照、再补拉、再排空缓冲"的顺序见 [frontend.md](./frontend.md) §3.3。
+
+设备没有 WebSocket，屏幕点亮时每 5 秒轮询概览（设备 token）：
+
+```http
+GET /api/v1/device/overview       pending 审批（最旧在前，最多 8）与 Task 投影（最多 12），序列化 ≤ 8192 字节，见 domain-model.md §4.1
+```
 
 ## 6. 唤醒通道
 
@@ -202,7 +223,7 @@ ws/<workspaceId>/run/<runId>/att/<attemptId>/log/<artifactId>
 - `transcript_chunks`：默认保留 180 天，之后按 Attempt 打包为 `log` artifact 并删除行（阶段 2 实现）；
 - worktree：Run `completed` 后 14 天由 Runner 清理，清理前检查 worktree 是否有未提交改动，有则跳过并在 status 中提示；`failed`、`lost`、`canceled` 的 worktree 不自动清理；
 - 用户注册的原始 checkout 永远不是清理目标；
-- `runner_pairing_codes`：过期 1 天后删除；
+- `runner_pairing_codes`、`device_pairing_codes`：过期 1 天后删除；
 - `sessions`：过期后删除。
 
 ## 9. Runner 本地文件

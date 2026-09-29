@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from 'pg';
@@ -193,11 +200,16 @@ describe('PostgreSQL persistence boundaries', () => {
   it('rejects changed migration bytes and rolls back failed pending DDL', async () => {
     await client.query('ROLLBACK');
     const directory = await mkdtemp(join(tmpdir(), 'aw-migrations-'));
+    const source = new URL('./migrations/', import.meta.url);
+    const names = (await readdir(source)).filter((name) =>
+      name.endsWith('.sql'),
+    );
     const original = await readFile(
-      new URL('./migrations/0001_initial.sql', import.meta.url),
+      new URL('0001_initial.sql', source),
       'utf8',
     );
     try {
+      await cp(source, directory, { recursive: true });
       await writeFile(
         join(directory, '0001_initial.sql'),
         original + '\n-- modified\n',
@@ -207,7 +219,7 @@ describe('PostgreSQL persistence boundaries', () => {
       ).rejects.toThrow('checksum mismatch');
       await writeFile(join(directory, '0001_initial.sql'), original);
       await writeFile(
-        join(directory, '0002_invalid.sql'),
+        join(directory, '9999_invalid.sql'),
         'CREATE TABLE rollback_probe (id integer); SELECT absent_column FROM rollback_probe;',
       );
       await expect(
@@ -223,7 +235,7 @@ describe('PostgreSQL persistence boundaries', () => {
             'SELECT count(*)::integer AS count FROM schema_migrations',
           )
         ).rows[0].count,
-      ).toBe(1);
+      ).toBe(names.length);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

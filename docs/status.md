@@ -18,7 +18,7 @@
 | Bun workspace、锁文件、Node.js 22 约束 | `package.json`、`bun.lock` | `bun install --frozen-lockfile` | 已验证 |
 | TypeScript 项目引用构建 | `tsconfig.json`、各包 `tsconfig.json` | `bun run typecheck` | 已验证 |
 | argon2id 原生模块冒烟 | `scripts/smoke-native.mjs` | `bun run smoke:native` | 已验证 |
-| 文档与代码类型对照 | `scripts/check-contract-docs.mjs` | `bun run check:contracts`，36 个类型 | 已验证 |
+| 文档与代码类型对照 | `scripts/check-contract-docs.mjs` | `bun run check:contracts`，40 个类型 | 已验证 |
 | Prettier | `.prettierrc.json` | `bun run format:check` | 已验证 |
 | CI | `.github/workflows/ci.yml` | 远程运行 #8 通过：宿主 PostgreSQL、build、双迁移、契约检查和排除本机 Pi 进程测试后的 28 个测试通过 | 已验证 |
 
@@ -36,6 +36,7 @@
 - `migrations/0001_initial.sql`：18 张业务表，租户复合外键贯穿所有表；部分唯一索引保证一个 Run 一个活动 Attempt、一个 AgentProfile 一个被领取的 Attempt；触发器锁死 Run 冻结 spec、终态 Attempt 和审计表；`updated_at` 自动维护。
 - `migrate.ts`：advisory lock 加校验和，一个事务里应用全部待应用迁移并 bootstrap 首个 Workspace；可作 CLI（`bun run db:migrate`）或库函数调用。
 - 2026-09-10 变更：`agent_profiles.engine` CHECK 加 `pi`。
+- 2026-09-29 变更：`migrations/0002_devices.sql` 新增 `devices`、`device_pairing_codes`（AI Passport 设备配对，见 §2.10）。
 - 验证：`migrate.test.ts` 8 个测试、远程 CI #8 和全套本地 `bun run test` 均已通过；本地 `bun run db:migrate` 双迁移已验证。
 
 ### 2.4 `packages/agent-adapters`
@@ -80,6 +81,13 @@
 - `apps/web/client/test/task-board.test.ts`：过滤、优先级排序不修改 Query 结果、合法/非法状态迁移的行为回归。
 - 验证：`bun install --frozen-lockfile`、`bun run typecheck`、`bun run build`、`bunx vitest run apps/web/client/test/task-board.test.ts`（3 tests）和 `bun run format` 后的 `git diff --check` 已通过。生产构建的 Zod 注释告警来自依赖包，不影响产物。
 
+### 2.10 AI Passport 设备（2026-09-29，`feature/passport-device`）
+
+- 契约：`Device`、`CreateDeviceInput/Output`、`PairDeviceInput/Output`、`DeviceOverview`（`packages/contracts/src/domain.ts`、`rest.ts`），类型块见 domain-model.md §4.1。
+- 服务端：`POST/GET /api/v1/devices`、`POST /api/v1/devices/:id/revoke`（session，变更要求 `Origin`）、`POST /api/v1/devices/pair`（无认证，配对码 10 分钟、一次性、只存 hash）；`awd_` 设备 token 只在 `GET /api/v1/device/overview` 与 `POST /api/v1/approvals/:id/resolve` 上有效，以设备创建者身份行事，`last_seen_at` 30 秒节流更新；概览投影与 8 KB 预算在 `src/device-overview.ts`。审批决定（Web 与设备）写 `audit_events`。
+- Web：Runner 页面新增"AI Passport 设备"：创建并一次性显示配对码（复制、过期时间）、设备列表（状态、最近在线、固件）、确认后撤销。
+- 验证：`apps/web/server/test/devices.test.ts` 6 个 DB 测试（配对/过期/重用、token 作用域、Runner token 被拒、撤销 401、概览排序/截断/字节预算、设备审批的 `decided_by` 与审计、重复处理 409）与 `device-overview.test.ts` 3 个纯函数测试；本机无 Docker 时用临时 PostgreSQL 16 设置 `DATABASE_URL` 运行 `bun run test`（13 个文件，41 个测试）通过；`curl` 端到端冒烟：创建、配对、概览、设备 token 访问 `/api/v1/tasks` 为 401、配对码重用 404。
+
 ## 3. 未完成
 
 按依赖顺序排。阶段 1 的 fake/协议链路、Pi RPC adapter、Runner dispatch、Profile UI、Pi 完整门禁、浏览器核心验收和远程 CI 已落地/通过；artifact 重复内容幂等已修复并通过重试验证。仅剩真实 Claude ACP 门禁，阻塞来自外部中转站/上游网络，不属于当前代码路径。
@@ -120,7 +128,7 @@ bun run smoke:native
 docker compose -f infra/local/compose.yml up -d
 cp .env.example .env
 bun run db:migrate && bun run db:migrate      # 第二次应输出 applied: []
-bun run test                                  # 10 个测试文件，29 个测试；另有 `bun run gate:pi`
+bun run test                                  # 13 个测试文件，41 个测试；另有 `bun run gate:pi`
 ```
 
 数据库可用并通过上述检查后，阶段一 Pi engine 代码、浏览器核心体验、可靠性和 CI 验收已收口。Claude ACP 门禁仅在上游恢复后补跑，不阻塞进入阶段二。

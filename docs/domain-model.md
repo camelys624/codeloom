@@ -14,6 +14,7 @@ Workspace（阶段 1 只有一个）
  ├── Runner
  │    ├── RunnerRepository        Runner 对某个 Repository 的本地映射（路径只在 Runner 侧）
  │    └── AgentProfile
+ ├── Device                       已配对的硬件伴侣（AI Passport），以创建者身份查看概览、处理审批
  ├── Task
  │    └── Run                      冻结 spec
  │         └── Attempt             worktree + 分支 + Agent session
@@ -85,6 +86,53 @@ type Runner = {
 ```
 
 `online` 等于存在活跃的 Runner WebSocket。连接断开且 60 秒内没有重连则为 `offline`。`draining` 表示不再领取新 Attempt 但让现有 Attempt 完成。`revoked` 使 token 立即失效。
+
+### 4.1 Device
+
+```ts
+type Device = {
+  id: string;                    // dev_…
+  workspaceId: string;
+  name: string;                  // 1..64
+  status: 'pending' | 'active' | 'revoked';
+  createdBy: string;             // 设备 token 以此成员身份行事
+  createdAt: string;
+  pairedAt: string | null;
+  lastSeenAt: string | null;     // 设备调用时更新，30 秒节流
+  firmwareVersion: string | null;
+};
+
+type DeviceOverviewApproval = {
+  id: string;
+  kind: 'tool' | 'file_write' | 'shell' | 'network' | 'other';
+  title: string;                 // ≤96 码点
+  detail: string;                // ≤200 码点；Pi payload.input、Claude payload.toolCall.rawInput 的 command/path/url，否则空串
+  taskTitle: string;             // ≤60 码点
+  runId: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
+type DeviceOverviewTask = {
+  id: string;
+  title: string;                 // ≤60 码点
+  status: 'backlog' | 'todo' | 'in_progress' | 'needs_review' | 'done' | 'canceled';
+  runStatus: 'pending' | 'active' | 'idle' | 'waiting_approval' | 'completed' | 'failed' | 'canceled' | 'lost' | null;
+};
+
+type DeviceOverview = {
+  serverTime: string;
+  workspaceName: string;         // ≤40 码点
+  approvalsTotal: number;        // 全部 pending 数
+  approvals: DeviceOverviewApproval[];  // pending，最旧在前，最多 8 条
+  tasksTotal: number;            // Workspace 全部 Task 数
+  tasks: DeviceOverviewTask[];   // 未 done/canceled 在前，再按 updatedAt 倒序，最多 12 条
+};
+```
+
+Device 是 Workspace 成员配对的硬件伴侣（FoloToy AI Passport，ESP32-C3 小屏），通过 Wi-Fi 直连服务端。Web 创建 Device 得到一次性配对码（`pending`），设备兑换后得到 `awd_` token 并变为 `active`；撤销后为 `revoked`，token 立即失效。Device 不是独立主体：token 只在 `GET /api/v1/device/overview` 与 `POST /api/v1/approvals/:id/resolve` 上有效，并以 `createdBy` 成员身份行事。
+
+`DeviceOverview` 是为小屏设计的投影：字符串在服务端按码点截断（截断时以 `…` 结尾），换行和控制字符折叠为单个空格；序列化后不超过 8192 字节，超出时先丢弃尾部 Task，再丢弃尾部审批，不截断 JSON。
 
 ## 5. AgentProfile 与能力
 

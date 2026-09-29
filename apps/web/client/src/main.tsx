@@ -47,6 +47,8 @@ import {
   TranscriptChunkSchema,
   type AgentProfile,
   type ApprovalRequest,
+  type Device,
+  type DeviceStatus,
   type RunEvent,
   type Runner,
   type Task,
@@ -1384,6 +1386,7 @@ function RunnersPage() {
           />
         ))}
       </section>
+      <DevicesSection />
       <section className="card">
         <h3>Repositories</h3>
         {repositories.data.length === 0 ? (
@@ -1436,6 +1439,218 @@ function RunnerCard({
       ) : (
         <p className="muted small">未配置 Profile。</p>
       )}
+    </section>
+  );
+}
+
+const DEVICE_STATUS_LABELS: Record<DeviceStatus, string> = {
+  pending: '待配对',
+  active: '已启用',
+  revoked: '已撤销',
+};
+
+function DevicesSection() {
+  const client = useQueryClient();
+  const devices = useQuery({ queryKey: ['devices'], queryFn: api.devices });
+  const [deviceName, setDeviceName] = useState('');
+  const [pairing, setPairing] = useState<{
+    deviceName: string;
+    pairingCode: string;
+    expiresAt: string;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<Device | null>(null);
+  const createDevice = useMutation({
+    mutationFn: () => api.createDevice({ name: deviceName.trim() }),
+    onSuccess: (value) => {
+      setDeviceName('');
+      setCopied(false);
+      setCopyError(false);
+      setPairing({
+        deviceName: value.device.name,
+        pairingCode: value.pairingCode,
+        expiresAt: value.expiresAt,
+      });
+      void client.invalidateQueries({ queryKey: ['devices'] });
+    },
+  });
+  const revokeDevice = useMutation({
+    mutationFn: (id: string) => api.revokeDevice(id),
+    onSuccess: () => {
+      setRevokeTarget(null);
+      void client.invalidateQueries({ queryKey: ['devices'] });
+    },
+  });
+  const copyPairingCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setCopyError(false);
+    } catch {
+      setCopied(false);
+      setCopyError(true);
+    }
+  };
+  return (
+    <section className="grid">
+      <div>
+        <h3>AI Passport 设备</h3>
+        <p className="muted small">
+          设备可查看任务并处理审批；配对码只显示一次，10 分钟内有效。
+        </p>
+      </div>
+      <section className="grid two">
+        <section className="card">
+          <h3>添加设备</h3>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              createDevice.mutate();
+            }}
+          >
+            <label>
+              名称
+              <input
+                value={deviceName}
+                onChange={(event) => setDeviceName(event.target.value)}
+                maxLength={64}
+                required
+              />
+            </label>
+            <button
+              disabled={createDevice.isPending || deviceName.trim() === ''}
+            >
+              生成配对码
+            </button>
+          </form>
+          {pairing && (
+            <div className="notice small">
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <span>
+                  {pairing.deviceName} 的配对码：
+                  <code>{pairing.pairingCode}</code>
+                </span>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void copyPairingCode(pairing.pairingCode)}
+                >
+                  {copied ? (
+                    <>
+                      <Check size={14} strokeWidth={1.8} /> 已复制
+                    </>
+                  ) : (
+                    '复制'
+                  )}
+                </button>
+              </div>
+              过期：{new Date(pairing.expiresAt).toLocaleString()}
+              <br />
+              请在 AI Passport 设备上输入配对码；关闭后将无法再次查看。
+              {copyError && (
+                <>
+                  <br />
+                  复制失败，请手动复制。
+                </>
+              )}
+              <div className="dialog-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setPairing(null)}
+                >
+                  完成
+                </button>
+              </div>
+            </div>
+          )}
+          {createDevice.error && <ErrorNotice error={createDevice.error} />}
+        </section>
+        <section className="card">
+          <h3>设备列表</h3>
+          {devices.isPending ? (
+            <p className="muted small">加载设备…</p>
+          ) : devices.error ? (
+            <ErrorNotice error={devices.error} />
+          ) : devices.data.length === 0 ? (
+            <p className="muted">还没有设备。</p>
+          ) : (
+            <div className="list">
+              {devices.data.map((device) => (
+                <div className="list-item" key={device.id}>
+                  <div
+                    className="row"
+                    style={{ justifyContent: 'space-between' }}
+                  >
+                    <strong>{device.name}</strong>
+                    <span className={`badge ${device.status}`}>
+                      {DEVICE_STATUS_LABELS[device.status]}
+                    </span>
+                  </div>
+                  <p className="muted small">
+                    最近在线：
+                    {device.lastSeenAt
+                      ? new Date(device.lastSeenAt).toLocaleString()
+                      : '从未'}{' '}
+                    · 固件：{device.firmwareVersion ?? '—'} · 配对时间：
+                    {device.pairedAt
+                      ? new Date(device.pairedAt).toLocaleString()
+                      : '—'}
+                  </p>
+                  {device.status !== 'revoked' && (
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => {
+                        revokeDevice.reset();
+                        setRevokeTarget(device);
+                      }}
+                    >
+                      撤销
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </section>
+      <AppDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !revokeDevice.isPending) setRevokeTarget(null);
+        }}
+        title="撤销设备"
+        description={
+          revokeTarget
+            ? `撤销后「${revokeTarget.name}」将立即失去访问权限，且无法恢复。`
+            : undefined
+        }
+      >
+        {revokeDevice.error && <ErrorNotice error={revokeDevice.error} />}
+        <div className="dialog-actions">
+          <Dialog.Close asChild>
+            <button
+              type="button"
+              className="secondary"
+              disabled={revokeDevice.isPending}
+            >
+              取消
+            </button>
+          </Dialog.Close>
+          <button
+            type="button"
+            className="danger"
+            disabled={revokeDevice.isPending || revokeTarget === null}
+            onClick={() => {
+              if (revokeTarget) revokeDevice.mutate(revokeTarget.id);
+            }}
+          >
+            {revokeDevice.isPending ? '撤销中…' : '确认撤销'}
+          </button>
+        </div>
+      </AppDialog>
     </section>
   );
 }

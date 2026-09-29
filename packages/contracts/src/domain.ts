@@ -80,6 +80,22 @@ export const RunnerSchema = z.strictObject({
   createdAt: TimestampSchema,
 });
 export type Runner = z.infer<typeof RunnerSchema>;
+export const DeviceStatusSchema = z.enum(['pending', 'active', 'revoked']);
+export type DeviceStatus = z.infer<typeof DeviceStatusSchema>;
+export const DeviceNameSchema = z.string().trim().min(1).max(64);
+export const FirmwareVersionSchema = z.string().max(32);
+export const DeviceSchema = z.strictObject({
+  id: IdSchema,
+  workspaceId: IdSchema,
+  name: DeviceNameSchema,
+  status: DeviceStatusSchema,
+  createdBy: IdSchema,
+  createdAt: TimestampSchema,
+  pairedAt: TimestampSchema.nullable(),
+  lastSeenAt: TimestampSchema.nullable(),
+  firmwareVersion: FirmwareVersionSchema.nullable(),
+});
+export type Device = z.infer<typeof DeviceSchema>;
 export const AgentEngineSchema = z.enum([
   'claude-code',
   'codex',

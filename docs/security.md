@@ -25,6 +25,7 @@
 - 所有 API 从 session 解析 `userId`，再校验 Workspace 成员身份；不信任请求体中的任何 requester 字段；
 - 所有查询带 `workspace_id` 条件，即使阶段 1 只有一个 Workspace；
 - CSRF：状态变更接口要求 `Origin` 与 `PUBLIC_ORIGIN` 一致。
+- 设备 bearer token（`Authorization: Bearer awd_…`，见 §3.1）是 session 之外唯一的用户侧凭据，只在 `GET /api/v1/device/overview` 与 `POST /api/v1/approvals/:id/resolve` 上被接受，以设备创建者（`devices.created_by`，必须仍是 Workspace 成员）身份行事；bearer 请求不带 cookie，不做 `Origin` 校验。其余用户接口只认 session cookie，继续拒绝任何 bearer token；Runner token 在设备接口上无效，设备 token 在 Runner 接口上也无效。
 - 反向代理之后（阶段 4）：Fastify 开启 `trustProxy` 且只信任代理地址；审计中的客户端 IP 取 `X-Forwarded-For` 中由代理写入的一项；前面没有代理时不得开启，防止伪造头。
 
 ## 3. Runner 凭据
@@ -35,6 +36,13 @@
 - 撤销：`runners.status = 'revoked'`，token 立即失效，WebSocket 立即关闭，pending Attempt 置 `failed`；
 - Runner 侧：`credentials.json` 权限 0600，目录 0700；Windows 使用用户级 AppData；
 - token 不出现在 URL、命令行参数、日志、worktree 和发送给 Agent 的环境变量中。
+
+### 3.1 设备凭据
+
+- 配对：Web（session + `Origin`）`POST /api/v1/devices` 生成配对码，规则同 Runner：随机 128 bit、10 分钟有效、一次性、只存 hash；设备以 `POST /api/v1/devices/pair` 在一个事务中兑换（无认证）；
+- `deviceToken`：`awd_` + 随机 256 bit，只存 sha256，不轮换；
+- 撤销：`POST /api/v1/devices/:id/revoke` 把 `devices.status` 置为 `revoked` 并清空 `token_hash`，所有设备调用立即 401；未兑换的配对码随之失效；
+- 设备本身视为持有创建者的"查看概览、处理审批"能力；丢失设备时应在 Web 中撤销。
 
 ## 4. 仓库与路径
 
@@ -97,7 +105,7 @@ Runner 自己执行的命令（git、Agent 可执行文件）：
 
 - 请求绑定 `(attemptId, requestId)`，一次性；
 - `expiresAt = min(24h, Turn 结束)`，过期视为 deny；
-- 决定必须由 Workspace 成员在 Web 中做出，写审计；
+- 决定必须由 Workspace 成员做出：在 Web 中（session + `Origin`），或经该成员配对的设备（设备 token，`decided_by` 为设备创建者）；每次决定都写审计（`data.via = 'web' | 'device'`，设备另记 `data.deviceId`）；
 - Attempt 终态或 Turn 取消时所有 pending 请求置 `expired`；
 - `allow_always` 只在当前 Attempt 内有效，不写回配置；
 - 阶段 1 没有自动批准规则。
@@ -118,6 +126,8 @@ Runner 自己执行的命令（git、Agent 可执行文件）：
 
 ## 12. 审计
 
-至少记录：用户登录与邀请；Runner 配对、轮换、撤销；Repository 注册；AgentProfile 变更；Run 创建、重试、取消、完成；审批请求与决定；artifact 下载；stale 事件被拒绝。
+至少记录：用户登录与邀请；Runner 配对、轮换、撤销；设备配对与撤销；Repository 注册；AgentProfile 变更；Run 创建、重试、取消、完成；审批请求与决定；artifact 下载；stale 事件被拒绝。
+
+当前已实现：审批决定（`entity_type = 'approval'`、`kind = 'approval.resolved'`，`actor` 为做决定的成员，`data` 含 `decision`、`via` 与设备 `deviceId`）。其余条目尚未写入 `audit_events`。
 
 `audit_events` 只追加，没有更新和删除接口。

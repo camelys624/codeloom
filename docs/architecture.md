@@ -130,8 +130,13 @@ Run 创建时保存不可变的 `FrozenRunSpec`：仓库、基线 commit、Runne
 
 - Task 看板；
 - Run 详情：转写流、Turn 列表、每轮 Diff、追加输入框、审批卡片、取消和重试；
-- Runner 列表和配对码；
+- Runner 列表和配对码；AI Passport 设备的配对码、列表与撤销；
 - Repository 和 Agent Profile 管理。
+
+### 设备（AI Passport）
+
+- 经 Wi-Fi 直连服务端 REST，不走 WebSocket；屏幕点亮时轮询 `GET /api/v1/device/overview`，用 `POST /api/v1/approvals/:id/resolve` 处理审批；
+- 使用设备 bearer token，以配对它的成员身份行事，权限边界见 [security.md](./security.md) §2、§3.1。
 
 ## 5. 一个 Run 的生命周期
 

@@ -3,6 +3,7 @@ import type {
   ApprovalRequest,
   Artifact,
   Attempt,
+  Device,
   Repository,
   Run,
   Runner,
@@ -71,6 +72,20 @@ export function mapRunner(row: Row): Runner {
     ...(row.last_seen_at ? { lastSeenAt: iso(row.last_seen_at) } : {}),
     createdBy: String(row.created_by),
     createdAt: iso(row.created_at),
+  };
+}
+
+export function mapDevice(row: Row): Device {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    name: String(row.name),
+    status: row.status as Device['status'],
+    createdBy: String(row.created_by),
+    createdAt: iso(row.created_at),
+    pairedAt: row.paired_at ? iso(row.paired_at) : null,
+    lastSeenAt: row.last_seen_at ? iso(row.last_seen_at) : null,
+    firmwareVersion: row.firmware_version ? String(row.firmware_version) : null,
   };
 }
 
